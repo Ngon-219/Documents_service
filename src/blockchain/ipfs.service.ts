@@ -1,11 +1,23 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ethers } from 'ethers';
+import FormData from "form-data";
+import got from "got";
 
 interface PinataUploadResponse {
   IpfsHash: string;
   PinSize: number;
   Timestamp: string;
+}
+
+interface PinataV3UploadResponse {
+  data: {
+    id: string;
+    name: string;
+    cid: string;
+    size: number;
+    created_at: string;
+  };
 }
 
 @Injectable()
@@ -16,75 +28,39 @@ export class IPFSService {
   private readonly pinataGateway: string;
 
   constructor(private configService: ConfigService) {
-    this.useMock = this.configService.get<string>('USE_MOCK_IPFS') === 'true';
     this.pinataJwt = this.configService.get<string>('PINATA_JWT') || '';
     this.pinataGateway = this.configService.get<string>('PINATA_GATEWAY') || 'gateway.pinata.cloud';
-    
-    if (this.useMock) {
-      this.logger.warn('🧪 Using MOCK IPFS - metadata will be stored as hash only');
-    } else {
-      if (!this.pinataJwt) {
-        this.logger.error('❌ PINATA_JWT is not configured. Please set it in .env file');
-        throw new Error('PINATA_JWT is required for IPFS service');
-      }
-      
-      this.logger.log('✅ IPFS service initialized with Pinata (REST API)');
-    }
   }
 
-  /**
-   * Upload file buffer to IPFS using Pinata
-   * @param buffer - File buffer to upload
-   * @param fileName - File name with extension
-   * @param keyvalues - Optional metadata for searching
-   * @returns IPFS CID (hash)
-   */
   async uploadFile(
     buffer: Buffer,
     fileName: string,
     keyvalues?: Record<string, any>,
   ): Promise<string> {
-    if (this.useMock) {
-      return this.mockUploadFile(buffer, fileName);
-    }
-
-    try {
-      // Create FormData
-      const FormData = require('form-data');
-      const formData = new FormData();
+      let data = new FormData();
+      const url = `https://uploads.pinata.cloud/v3/files`;
       
-      formData.append('file', buffer, { filename: fileName });
-      
-      const metadata = JSON.stringify({
-        name: fileName,
-        keyvalues: keyvalues || {},
+      // Append buffer directly (FormData accepts Buffer)
+      data.append('file', buffer, {
+        filename: fileName,
+        contentType: 'application/octet-stream',
       });
-      formData.append('pinataMetadata', metadata);
+      data.append('network', 'public');
+      
+      this.logger.log(`Uploading file to IPFS: ${fileName} (${buffer.length} bytes)`);
 
-      const response = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
-        method: 'POST',
+      const response = await got(url, {
+        method: "POST",
         headers: {
           Authorization: `Bearer ${this.pinataJwt}`,
-          ...formData.getHeaders(),
         },
-        body: formData,
+        body: data,
+      }).on("uploadProgress", (progress) => {
+        console.log(progress);
       });
-
-      if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(`Pinata file upload failed: ${response.statusText} - ${errorData}`);
-      }
-
-      const data: PinataUploadResponse = await response.json();
-      
-      this.logger.log(`📌 Successfully uploaded file to IPFS: ${data.IpfsHash}`);
-      this.logger.debug(`📊 File details - CID: ${data.IpfsHash}, Size: ${data.PinSize} bytes`);
-      
-      return data.IpfsHash;
-    } catch (error) {
-      this.logger.error('❌ Failed to upload file to IPFS via Pinata', error);
-      throw new Error(`IPFS file upload failed: ${error.message}`);
-    }
+      const result: PinataV3UploadResponse = JSON.parse(response.body);
+      const ipfsHash = result.data.cid;
+      return ipfsHash;
   }
 
   /**
@@ -104,19 +80,27 @@ export class IPFSService {
     }
 
     try {
-      const response = await fetch('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
+      // Convert JSON metadata to Buffer and upload as file using v3 API
+      const jsonString = JSON.stringify(metadata, null, 2);
+      const buffer = Buffer.from(jsonString, 'utf-8');
+      const fileName = name || `metadata-${Date.now()}.json`;
+      
+      const FormData = require('form-data');
+      const formData = new FormData();
+      
+      formData.append('file', buffer, { 
+        filename: fileName,
+        contentType: 'application/json'
+      });
+      formData.append('network', 'public');
+
+      const response = await fetch('https://uploads.pinata.cloud/v3/files', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
           Authorization: `Bearer ${this.pinataJwt}`,
+          ...formData.getHeaders(),
         },
-        body: JSON.stringify({
-          pinataContent: metadata,
-          pinataMetadata: {
-            name: name || `document-${Date.now()}.json`,
-            keyvalues: keyvalues || {},
-          },
-        }),
+        body: formData,
       });
 
       if (!response.ok) {
@@ -124,12 +108,13 @@ export class IPFSService {
         throw new Error(`Pinata upload failed: ${response.statusText} - ${errorData}`);
       }
 
-      const data: PinataUploadResponse = await response.json();
+      const result: PinataV3UploadResponse = await response.json();
+      const ipfsHash = result.data.cid;
       
-      this.logger.log(`📌 Successfully uploaded to IPFS: ${data.IpfsHash}`);
-      this.logger.debug(`📊 Upload details - CID: ${data.IpfsHash}, Size: ${data.PinSize} bytes`);
+      this.logger.log(`📌 Successfully uploaded metadata to IPFS: ${ipfsHash}`);
+      this.logger.debug(`📊 Metadata details - CID: ${ipfsHash}, Size: ${result.data.size} bytes`);
       
-      return data.IpfsHash;
+      return ipfsHash;
     } catch (error) {
       this.logger.error('❌ Failed to upload metadata to IPFS via Pinata', error);
       throw new Error(`IPFS upload failed: ${error.message}`);
