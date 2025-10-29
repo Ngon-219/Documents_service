@@ -49,7 +49,10 @@ export class Document {
 
   // IPFS
   @Column({ type: 'varchar', nullable: true })
-  ipfs_hash: string;
+  ipfs_hash: string; // Metadata JSON hash
+
+  @Column({ type: 'varchar', nullable: true })
+  pdf_ipfs_hash: string; // PDF file hash
 
   @Column({ type: 'varchar', length: 66, nullable: true })
   document_hash: string; // SHA256/keccak256 hash

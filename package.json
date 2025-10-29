@@ -33,16 +33,21 @@
     "@nestjs/platform-express": "^10.0.0",
     "@nestjs/swagger": "^7.4.2",
     "@nestjs/typeorm": "^10.0.2",
+    "@types/pdfkit": "^0.17.3",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "ethers": "^6.13.4",
+    "form-data": "^4.0.4",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
+    "pdfkit": "^0.17.2",
     "pg": "^8.13.1",
+    "pinata": "^2.5.1",
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.1",
     "typeorm": "^0.3.20",
-    "uuid": "^11.0.3"
+    "uuid": "^11.0.3",
+    "yarn": "^1.22.22"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.0.0",

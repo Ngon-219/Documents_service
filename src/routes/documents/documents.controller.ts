@@ -9,6 +9,8 @@ import {
   HttpStatus,
   UseGuards,
   Req,
+  Res,
+  StreamableFile,
 } from '@nestjs/common';
 import { 
   ApiTags, 
@@ -18,7 +20,7 @@ import {
   ApiParam,
   ApiBody,
 } from '@nestjs/swagger';
-import { Request } from 'express';
+import type { Request, Response } from 'express';
 import { DocumentsService } from './documents.service';
 import { RequestDocumentDto, ApproveDocumentDto, DocumentResponse, VerifyDocumentResponse } from './dto';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
@@ -224,10 +226,7 @@ export class DocumentsController {
     return await this.documentsService.revokeDocument(documentId);
   }
 
-  /**
-   * Get all document types (PUBLIC - no auth required)
-   * GET /documents/types/all
-   */
+
   @Get('types/all')
   @ApiOperation({ 
     summary: 'Get document types (Public)', 
@@ -239,6 +238,49 @@ export class DocumentsController {
   })
   async getDocumentTypes() {
     return await this.documentsService.getDocumentTypes();
+  }
+
+  /**
+   * Download document PDF
+   * GET /documents/:id/pdf
+   * Auth: Authenticated users
+   */
+  @Get(':id/pdf')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ 
+    summary: 'Download document PDF', 
+    description: 'Download the PDF certificate for a document from IPFS' 
+  })
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiResponse({ 
+    status: 200, 
+    description: 'PDF file',
+    content: {
+      'application/pdf': {
+        schema: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Document or PDF not found' })
+  async downloadPdf(
+    @Param('id') documentId: string,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<StreamableFile> {
+    const { buffer, ipfsHash } = await this.documentsService.getDocumentPdf(documentId);
+    
+    // Set response headers
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="document-${documentId}.pdf"`,
+      'X-IPFS-Hash': ipfsHash,
+    });
+    
+    return new StreamableFile(buffer);
   }
 }
 

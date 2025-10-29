@@ -1,9 +1,11 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Document, DocumentStatus } from '../../entities/document.entity';
 import { DocumentType } from '../../entities/document-type.entity';
 import { BlockchainService } from '../../blockchain/blockchain.service';
+import { IPFSService } from '../../blockchain/ipfs.service';
+import { PdfServiceService } from '../../pdf_service/pdf_service.service';
 import { ConfigService } from '@nestjs/config';
 import { ethers } from 'ethers';
 import { RequestDocumentDto, ApproveDocumentDto } from './dto';
@@ -18,12 +20,11 @@ export class DocumentsService {
     @InjectRepository(DocumentType)
     private documentTypeRepository: Repository<DocumentType>,
     private blockchainService: BlockchainService,
+    private ipfsService: IPFSService,
+    private pdfService: PdfServiceService,
     private configService: ConfigService,
   ) {}
 
-  /**
-   * Step 1: Student requests document (creates draft)
-   */
   async requestDocument(userId: string, dto: RequestDocumentDto): Promise<Document> {
     this.logger.log(
       `Student ${userId} requesting document type ${dto.document_type_id}`,
@@ -40,10 +41,10 @@ export class DocumentsService {
     const document = this.documentRepository.create({
       user_id: userId,
       document_type_id: dto.document_type_id,
-      issuer_id: userId, // Will be updated when manager approves
+      issuer_id: userId,
       metadata: dto.metadata || {},
       status: DocumentStatus.DRAFT,
-      is_valid: false, // Not yet minted
+      is_valid: false,
       contract_address:
         this.configService.get<string>('ISSUANCE_CONTRACT_ADDRESS'),
     });
@@ -51,9 +52,6 @@ export class DocumentsService {
     return await this.documentRepository.save(document);
   }
 
-  /**
-   * Step 2: Manager approves and signs on blockchain
-   */
   async approveAndSignDocument(
     documentId: string,
     issuerId: string,
@@ -75,36 +73,71 @@ export class DocumentsService {
     }
 
     if (document.status !== DocumentStatus.DRAFT) {
-      throw new Error(
-        `Cannot approve document with status: ${document.status}`,
+      throw new BadRequestException(
+        `Cannot approve document with status: ${document.status}. Only DRAFT documents can be approved.`,
       );
     }
 
-    // Update to pending approval
+    // Update to pending blockchain
     document.status = DocumentStatus.PENDING_BLOCKCHAIN;
     document.issuer_id = issuerId;
     await this.documentRepository.save(document);
 
     try {
-      // Prepare metadata for IPFS
+      this.logger.log(`Starting blockchain process for document ${documentId}`);
+
+      // Step 1: Generate PDF
+      this.logger.log('📄 Generating PDF certificate...');
+      const pdfBuffer = await this.pdfService.generatePdf({
+        document,
+        documentType: document.documentType,
+        // You can add student/issuer names from auth service if needed
+      });
+
+      // Step 2: Upload PDF to IPFS
+      this.logger.log('📤 Uploading PDF to IPFS...');
+      const pdfFileName = `document-${documentId}.pdf`;
+      const pdfIpfsHash = await this.ipfsService.uploadFile(pdfBuffer, pdfFileName, {
+        documentId: documentId,
+        documentType: document.documentType.document_type_name,
+        studentId: document.user_id,
+      });
+      this.logger.log(`✅ PDF uploaded to IPFS: ${pdfIpfsHash}`);
+
+      // Step 3: Prepare metadata for IPFS (include PDF link)
       const metadata = {
         studentId: studentBlockchainId,
         documentType: document.documentType.document_type_name,
+        documentTypeId: document.document_type_id,
+        studentUserId: document.user_id,
+        issuerUserId: issuerId,
         ...document.metadata,
         issuedDate: new Date().toISOString(),
         issuer: issuerId,
+        version: '1.0',
+        // Add PDF IPFS link
+        pdfFile: `ipfs://${pdfIpfsHash}`,
+        pdfGateway: `https://gateway.pinata.cloud/ipfs/${pdfIpfsHash}`,
       };
 
-      // TODO: Upload to IPFS (implement IPFS service)
-      const ipfsHash = 'Qm...'; // Placeholder
+      this.logger.log('Metadata prepared, uploading to IPFS...');
+
+      // Step 4: Upload metadata to IPFS
+      const ipfsHash = await this.ipfsService.uploadMetadata(metadata);
       const tokenURI = `ipfs://${ipfsHash}`;
 
-      // Create document hash
+      this.logger.log(`IPFS upload successful: ${ipfsHash}`);
+
+      // Step 5: Create document hash (for blockchain integrity)
       const documentHash = ethers.keccak256(
         ethers.toUtf8Bytes(JSON.stringify(metadata)),
       );
 
-      // Call blockchain
+      this.logger.log(`Document hash generated: ${documentHash}`);
+
+      // Step 6: Sign document on blockchain and mint NFT
+      this.logger.log('Signing document on blockchain...');
+      
       const { txHash, blockchainDocId, tokenId } =
         await this.blockchainService.signDocument(
           studentBlockchainId,
@@ -113,26 +146,39 @@ export class DocumentsService {
           tokenURI,
         );
 
-      // Update document with blockchain data
+      this.logger.log(`Document signed successfully!`);
+      this.logger.log(`- Transaction Hash: ${txHash}`);
+      this.logger.log(`- Blockchain Doc ID: ${blockchainDocId}`);
+      this.logger.log(`- NFT Token ID: ${tokenId}`);
+
+      // Step 7: Update document with blockchain data
       document.tx_hash = txHash;
       document.blockchain_doc_id = blockchainDocId;
       document.token_id = tokenId;
       document.ipfs_hash = ipfsHash;
+      document.pdf_ipfs_hash = pdfIpfsHash;
       document.document_hash = documentHash;
       document.status = DocumentStatus.MINTED;
       document.is_valid = true;
       document.issued_at = new Date();
       document.verified_at = new Date();
 
-      return await this.documentRepository.save(document);
+      const savedDocument = await this.documentRepository.save(document);
+
+      this.logger.log(`✅ Document ${documentId} successfully minted as NFT!`);
+
+      return savedDocument;
     } catch (error) {
-      this.logger.error('Failed to sign document on blockchain', error);
+      this.logger.error('❌ Failed to sign document on blockchain', error);
 
       // Mark as failed
       document.status = DocumentStatus.FAILED;
       await this.documentRepository.save(document);
 
-      throw error;
+      // Re-throw with more context
+      throw new BadRequestException(
+        `Failed to mint document on blockchain: ${error.message}`,
+      );
     }
   }
 
@@ -241,6 +287,75 @@ export class DocumentsService {
    */
   async getDocumentTypes(): Promise<DocumentType[]> {
     return await this.documentTypeRepository.find();
+  }
+
+  /**
+   * Get PDF file from IPFS
+   * @param documentId Document UUID
+   * @returns PDF buffer and IPFS hash
+   */
+  async getDocumentPdf(documentId: string): Promise<{ buffer: Buffer; ipfsHash: string }> {
+    const document = await this.documentRepository.findOne({
+      where: { document_id: documentId },
+    });
+
+    if (!document) {
+      throw new NotFoundException('Document not found');
+    }
+
+    if (!document.pdf_ipfs_hash) {
+      throw new NotFoundException('PDF not available for this document');
+    }
+
+    // For mock mode, we can regenerate the PDF
+    if (this.configService.get<string>('USE_MOCK_IPFS') === 'true') {
+      this.logger.warn('Mock mode: Regenerating PDF instead of downloading from IPFS');
+      const documentWithRelations = await this.documentRepository.findOne({
+        where: { document_id: documentId },
+        relations: ['documentType'],
+      });
+      
+      if (!documentWithRelations) {
+        throw new NotFoundException('Document not found');
+      }
+      
+      const pdfBuffer = await this.pdfService.generatePdf({
+        document: documentWithRelations,
+        documentType: documentWithRelations.documentType,
+      });
+      
+      return {
+        buffer: pdfBuffer,
+        ipfsHash: document.pdf_ipfs_hash,
+      };
+    }
+
+    // Download from IPFS
+    try {
+      const gateway = this.configService.get<string>('PINATA_GATEWAY') || 'gateway.pinata.cloud';
+      const url = `https://${gateway}/ipfs/${document.pdf_ipfs_hash}`;
+      
+      this.logger.log(`Downloading PDF from IPFS: ${url}`);
+      
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to download PDF: ${response.statusText}`);
+      }
+      
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      
+      this.logger.log(`✅ PDF downloaded successfully (${buffer.length} bytes)`);
+      
+      return {
+        buffer,
+        ipfsHash: document.pdf_ipfs_hash,
+      };
+    } catch (error) {
+      this.logger.error(`❌ Failed to download PDF from IPFS`, error);
+      throw new BadRequestException(`Failed to download PDF: ${error.message}`);
+    }
   }
 }
 
