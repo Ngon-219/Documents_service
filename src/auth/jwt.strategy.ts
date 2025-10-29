@@ -4,11 +4,12 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 
 export interface JwtPayload {
-  user_id: string;
-  email: string;
-  role: string;
-  iat?: number;
-  exp?: number;
+  userId: String,
+  userName: String,
+  iap: number,
+  iat: number,
+  exp: number,
+  role: String,
 }
 
 @Injectable()
@@ -27,14 +28,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload) {
-    if (!payload.user_id || !payload.role) {
+    console.log("payload: ", payload);
+    if (!payload.userId || !payload.role) {
       throw new UnauthorizedException('Invalid token payload');
     }
 
     // Return user info to be attached to request
     return {
-      userId: payload.user_id,
-      email: payload.email,
+      userId: payload.userId,
       role: payload.role,
     };
   }
