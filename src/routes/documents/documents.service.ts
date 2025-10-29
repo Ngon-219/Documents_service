@@ -24,9 +24,9 @@ export class DocumentsService {
   /**
    * Step 1: Student requests document (creates draft)
    */
-  async requestDocument(dto: RequestDocumentDto): Promise<Document> {
+  async requestDocument(userId: string, dto: RequestDocumentDto): Promise<Document> {
     this.logger.log(
-      `Student ${dto.user_id} requesting document type ${dto.document_type_id}`,
+      `Student ${userId} requesting document type ${dto.document_type_id}`,
     );
 
     const documentType = await this.documentTypeRepository.findOne({
@@ -38,9 +38,9 @@ export class DocumentsService {
     }
 
     const document = this.documentRepository.create({
-      user_id: dto.user_id,
+      user_id: userId,
       document_type_id: dto.document_type_id,
-      issuer_id: dto.user_id, // Will be updated when manager approves
+      issuer_id: userId, // Will be updated when manager approves
       metadata: dto.metadata || {},
       status: DocumentStatus.DRAFT,
       is_valid: false, // Not yet minted
@@ -56,10 +56,11 @@ export class DocumentsService {
    */
   async approveAndSignDocument(
     documentId: string,
+    issuerId: string,
     dto: ApproveDocumentDto,
   ): Promise<Document> {
     this.logger.log(
-      `Manager ${dto.issuer_id} approving document ${documentId}`,
+      `Manager ${issuerId} approving document ${documentId}`,
     );
 
     const studentBlockchainId = dto.student_blockchain_id;
@@ -81,10 +82,7 @@ export class DocumentsService {
 
     // Update to pending approval
     document.status = DocumentStatus.PENDING_BLOCKCHAIN;
-    if (!dto.issuer_id) {
-      throw new Error('Issuer ID is required');
-    }
-    document.issuer_id = dto.issuer_id;
+    document.issuer_id = issuerId;
     await this.documentRepository.save(document);
 
     try {
@@ -94,7 +92,7 @@ export class DocumentsService {
         documentType: document.documentType.document_type_name,
         ...document.metadata,
         issuedDate: new Date().toISOString(),
-        issuer: dto.issuer_id,
+        issuer: issuerId,
       };
 
       // TODO: Upload to IPFS (implement IPFS service)

@@ -3,7 +3,6 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtStrategy } from './jwt.strategy';
-import { APP_GUARD } from '@nestjs/core';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 
@@ -23,16 +22,10 @@ import { RolesGuard } from './guards/roles.guard';
   ],
   providers: [
     JwtStrategy,
-    {
-      provide: APP_GUARD,
-      useClass: JwtAuthGuard, // Apply JWT guard globally
-    },
-    {
-      provide: APP_GUARD,
-      useClass: RolesGuard, // Apply roles guard globally
-    },
+    JwtAuthGuard,  // Provide guards for manual use
+    RolesGuard,
   ],
-  exports: [JwtModule, PassportModule],
+  exports: [JwtModule, PassportModule, JwtAuthGuard, RolesGuard],
 })
 export class AuthModule {}
 

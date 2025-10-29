@@ -89,6 +89,32 @@ npm run start:dev
 
 Server sẽ chạy tại `http://localhost:3000`
 
+## 📚 API Documentation (Swagger)
+
+Swagger UI đã được tích hợp vào project. Sau khi chạy server, bạn có thể truy cập:
+
+```
+http://localhost:3000/api/docs
+```
+
+### Swagger Features:
+
+- 📖 **Interactive API Documentation** - Xem tất cả endpoints với mô tả chi tiết
+- 🔐 **Authentication Support** - Test API với JWT Bearer token
+- 🧪 **Try It Out** - Thực hiện request trực tiếp từ browser
+- 📝 **Request/Response Examples** - Xem cấu trúc dữ liệu đầy đủ
+- 🏷️ **Schema Definitions** - DTOs và response models tự động sinh
+
+### Cách sử dụng Swagger:
+
+1. Khởi động server: `npm run start:dev`
+2. Truy cập: `http://localhost:3000/api/docs`
+3. Để test protected endpoints:
+   - Click nút **"Authorize"** ở góc trên bên phải
+   - Nhập JWT token (lấy từ auth_service)
+   - Click **"Authorize"** để lưu
+   - Giờ bạn có thể test tất cả các endpoints cần authentication
+
 ## 📡 API Endpoints
 
 ### 🔓 Public Endpoints (No Auth)
