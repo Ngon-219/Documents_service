@@ -118,6 +118,8 @@ export class BlockchainService {
         data: event.data,
       });
 
+      console.log("Parsed Event: ", parsedEvent);
+
       if (!parsedEvent) {
         throw new Error('Failed to parse DocumentSigned event');
       }

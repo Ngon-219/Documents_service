@@ -75,40 +75,35 @@ export class IPFSService {
     name?: string,
     keyvalues?: Record<string, any>,
   ): Promise<string> {
-    if (this.useMock) {
-      return this.mockUpload(metadata);
-    }
-
     try {
       // Convert JSON metadata to Buffer and upload as file using v3 API
       const jsonString = JSON.stringify(metadata, null, 2);
       const buffer = Buffer.from(jsonString, 'utf-8');
       const fileName = name || `metadata-${Date.now()}.json`;
       
-      const FormData = require('form-data');
-      const formData = new FormData();
+      let data = new FormData();
+      const url = `https://uploads.pinata.cloud/v3/files`;
       
-      formData.append('file', buffer, { 
+      // Append buffer directly (FormData accepts Buffer)
+      data.append('file', buffer, {
         filename: fileName,
-        contentType: 'application/json'
+        contentType: 'application/json',
       });
-      formData.append('network', 'public');
+      data.append('network', 'public');
+      
+      this.logger.log(`Uploading metadata to IPFS: ${fileName} (${buffer.length} bytes)`);
 
-      const response = await fetch('https://uploads.pinata.cloud/v3/files', {
-        method: 'POST',
+      const response = await got(url, {
+        method: "POST",
         headers: {
           Authorization: `Bearer ${this.pinataJwt}`,
-          ...formData.getHeaders(),
         },
-        body: formData,
+        body: data,
+      }).on("uploadProgress", (progress) => {
+        console.log(progress);
       });
 
-      if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(`Pinata upload failed: ${response.statusText} - ${errorData}`);
-      }
-
-      const result: PinataV3UploadResponse = await response.json();
+      const result: PinataV3UploadResponse = JSON.parse(response.body);
       const ipfsHash = result.data.cid;
       
       this.logger.log(`📌 Successfully uploaded metadata to IPFS: ${ipfsHash}`);
