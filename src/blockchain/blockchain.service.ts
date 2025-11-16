@@ -5,6 +5,7 @@ import { ethers } from 'ethers';
 // Import ABIs (you'll need to copy these from smart_contract/artifacts)
 import IssuanceOfDocumentABI from './abis/IssuanceOfDocument.json';
 import DocumentNFTABI from './abis/DocumentNFT.json';
+import DataStorageABI from './abis/DataStorage.json';
 
 @Injectable()
 export class BlockchainService {
@@ -13,6 +14,7 @@ export class BlockchainService {
   private wallet: ethers.Wallet;
   private issuanceContract: ethers.Contract;
   private documentNFTContract: ethers.Contract;
+  private dataStorageContract: ethers.Contract;
 
   constructor(private configService: ConfigService) {
     this.initializeBlockchain();
@@ -49,6 +51,13 @@ export class BlockchainService {
         throw new Error('DOCUMENT_NFT_CONTRACT_ADDRESS is not defined');
       }
 
+      const dataStorageAddress = this.configService.get<string>(
+        'DATA_STORAGE_CONTRACT_ADDRESS',
+      );
+      if (!dataStorageAddress) {
+        throw new Error('DATA_STORAGE_CONTRACT_ADDRESS is not defined');
+      }
+
       this.issuanceContract = new ethers.Contract(
         issuanceAddress,
         IssuanceOfDocumentABI,
@@ -58,6 +67,12 @@ export class BlockchainService {
       this.documentNFTContract = new ethers.Contract(
         nftAddress,
         DocumentNFTABI,
+        this.wallet,
+      );
+
+      this.dataStorageContract = new ethers.Contract(
+        dataStorageAddress,
+        DataStorageABI,
         this.wallet,
       );
 
@@ -227,6 +242,74 @@ export class BlockchainService {
       return tokenIds.map((id: bigint) => id.toString());
     } catch (error) {
       this.logger.error('Failed to get student NFTs', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get student blockchain ID by wallet address from DataStorage
+   */
+  async getStudentIdByAddress(walletAddress: string): Promise<number> {
+    try {
+      // Validate address format
+      if (!ethers.isAddress(walletAddress)) {
+        throw new Error(`Invalid wallet address format: ${walletAddress}`);
+      }
+
+      this.logger.log(`Getting student ID for wallet address: ${walletAddress}`);
+
+      const studentId = await this.dataStorageContract.getStudentIdByAddress(
+        walletAddress,
+      );
+
+      const studentIdNumber = Number(studentId);
+
+      if (studentIdNumber === 0) {
+        throw new Error(
+          `No student found for wallet address: ${walletAddress}`,
+        );
+      }
+
+      this.logger.log(
+        `Student ID found: ${studentIdNumber} for address: ${walletAddress}`,
+      );
+
+      return studentIdNumber;
+    } catch (error) {
+      this.logger.error(
+        `Failed to get student ID for address ${walletAddress}`,
+        error,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Get student info from DataStorage
+   */
+  async getStudentInfo(studentId: number): Promise<{
+    id: number;
+    walletAddress: string;
+    studentCode: string;
+    fullName: string;
+    email: string;
+    isActive: boolean;
+    registeredAt: Date;
+  }> {
+    try {
+      const studentInfo = await this.dataStorageContract.getStudent(studentId);
+
+      return {
+        id: Number(studentInfo.id),
+        walletAddress: studentInfo.walletAddress,
+        studentCode: studentInfo.studentCode,
+        fullName: studentInfo.fullName,
+        email: studentInfo.email,
+        isActive: studentInfo.isActive,
+        registeredAt: new Date(Number(studentInfo.registeredAt) * 1000),
+      };
+    } catch (error) {
+      this.logger.error(`Failed to get student info for ID ${studentId}`, error);
       throw error;
     }
   }

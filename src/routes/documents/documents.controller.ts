@@ -5,6 +5,7 @@ import {
   Put,
   Body,
   Param,
+  Query,
   HttpCode,
   HttpStatus,
   UseGuards,
@@ -22,7 +23,7 @@ import {
 } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { DocumentsService } from './documents.service';
-import { RequestDocumentDto, ApproveDocumentDto, DocumentResponse, VerifyDocumentResponse } from './dto';
+import { RequestDocumentDto, ApproveDocumentDto, DocumentResponse, VerifyDocumentResponse, GetAllDocumentsQueryDto, PaginatedDocumentsResponse } from './dto';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
 import { Roles, UserRole } from '../../auth/decorators/roles.decorator';
@@ -40,12 +41,6 @@ interface RequestWithUser extends Request {
 @Controller('documents')
 export class DocumentsController {
   constructor(private readonly documentsService: DocumentsService) {}
-
-  /**
-   * Student requests a document
-   * POST /documents/request
-   * Auth: Student only
-   */
   @Post('request')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.STUDENT)
@@ -53,7 +48,7 @@ export class DocumentsController {
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ 
     summary: 'Request a document', 
-    description: 'Student requests a new document (requires Student role). User ID is automatically extracted from JWT token.' 
+    description: 'Student requests a new document (requires Student role and MFA verification). User ID is automatically extracted from JWT token. MFA authenticator code is required in request body.' 
   })
   @ApiBody({ type: RequestDocumentDto })
   @ApiResponse({ 
@@ -61,7 +56,7 @@ export class DocumentsController {
     description: 'Document requested successfully',
     type: DocumentResponse,
   })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 401, description: 'Unauthorized - Invalid MFA code or authentication failed' })
   @ApiResponse({ status: 403, description: 'Forbidden - Student role required' })
   async requestDocument(
     @Body() dto: RequestDocumentDto,
@@ -74,8 +69,9 @@ export class DocumentsController {
   /**
    * Manager approves and signs document on blockchain
    * POST /documents/:id/approve
-   * Auth: Manager or Admin only
-   * Body: { student_blockchain_id }
+   * Auth: Manager or Admin only (requires MFA verification)
+   * Body: { authenticator_code }
+   * Note: Student wallet address is automatically retrieved from document.user_id via wallets table
    */
   @Post(':id/approve')
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -84,7 +80,7 @@ export class DocumentsController {
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ 
     summary: 'Approve and sign document', 
-    description: 'Manager approves document and issues it on blockchain (requires Manager or Admin role). Issuer ID is automatically extracted from JWT token.' 
+    description: 'Manager approves document and issues it on blockchain (requires Manager or Admin role and MFA verification). Issuer ID is automatically extracted from JWT token. MFA authenticator code is required. Student wallet address is automatically retrieved from document.user_id via wallets table. Student blockchain ID will be automatically retrieved from DataStorage contract using the wallet address.' 
   })
   @ApiParam({ name: 'id', description: 'Document UUID' })
   @ApiBody({ type: ApproveDocumentDto })
@@ -93,7 +89,7 @@ export class DocumentsController {
     description: 'Document approved and signed successfully',
     type: DocumentResponse,
   })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 401, description: 'Unauthorized - Invalid MFA code or authentication failed' })
   @ApiResponse({ status: 403, description: 'Forbidden - Manager or Admin role required' })
   @ApiResponse({ status: 404, description: 'Document not found' })
   async approveDocument(
@@ -103,6 +99,30 @@ export class DocumentsController {
   ) {
     const issuer_id = request.user.userId;
     return await this.documentsService.approveAndSignDocument(documentId, issuer_id, dto);
+  }
+
+  /**
+   * Get all documents with pagination, filter, and search
+   * GET /documents/all
+   * Auth: Manager or Admin only
+   */
+  @Get('all')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.MANAGER, UserRole.ADMIN)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ 
+    summary: 'Get all documents', 
+    description: 'Retrieve all documents in the system with pagination and status filter. Documents can be sorted by created_at, updated_at, or issued_at (default: created_at DESC). Only accessible by Manager or Admin.' 
+  })
+  @ApiResponse({ 
+    status: 200, 
+    description: 'Paginated list of documents',
+    type: PaginatedDocumentsResponse,
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden - Manager or Admin role required' })
+  async getAllDocuments(@Query() query: GetAllDocumentsQueryDto): Promise<PaginatedDocumentsResponse> {
+    return await this.documentsService.getAllDocuments(query);
   }
 
   /**

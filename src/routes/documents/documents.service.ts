@@ -1,14 +1,16 @@
-import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Document, DocumentStatus } from '../../entities/document.entity';
 import { DocumentType } from '../../entities/document-type.entity';
+import { Wallet } from '../../entities/wallet.entity';
 import { BlockchainService } from '../../blockchain/blockchain.service';
 import { IPFSService } from '../../blockchain/ipfs.service';
 import { PdfServiceService } from '../../pdf_service/pdf_service.service';
 import { ConfigService } from '@nestjs/config';
 import { ethers } from 'ethers';
-import { RequestDocumentDto, ApproveDocumentDto } from './dto';
+import { RequestDocumentDto, ApproveDocumentDto, GetAllDocumentsQueryDto, PaginatedDocumentsResponse } from './dto';
+import { MfaService } from '../../grpc/mfa.service';
 
 @Injectable()
 export class DocumentsService {
@@ -19,10 +21,13 @@ export class DocumentsService {
     private documentRepository: Repository<Document>,
     @InjectRepository(DocumentType)
     private documentTypeRepository: Repository<DocumentType>,
+    @InjectRepository(Wallet)
+    private walletRepository: Repository<Wallet>,
     private blockchainService: BlockchainService,
     private ipfsService: IPFSService,
     private pdfService: PdfServiceService,
     private configService: ConfigService,
+    private mfaService: MfaService,
   ) {}
 
   async requestDocument(userId: string, dto: RequestDocumentDto): Promise<Document> {
@@ -30,6 +35,41 @@ export class DocumentsService {
       `Student ${userId} requesting document type ${dto.document_type_id}`,
     );
 
+    // Step 1: Verify MFA code
+    this.logger.log(`Verifying MFA code for user ${userId}`);
+    try {
+      const mfaResult = await this.mfaService.verifyMfaCode(
+        userId,
+        dto.authenticator_code,
+      );
+
+      if (!mfaResult.is_valid) {
+        this.logger.warn(`MFA verification failed for user ${userId}: ${mfaResult.reason}`);
+        
+        if (mfaResult.locked_until) {
+          const lockedUntil = new Date(mfaResult.locked_until * 1000);
+          throw new UnauthorizedException(
+            `MFA verification failed. Account locked until ${lockedUntil.toISOString()}. Reason: ${mfaResult.reason}`,
+          );
+        }
+
+        throw new UnauthorizedException(
+          `MFA verification failed: ${mfaResult.reason || mfaResult.message}`,
+        );
+      }
+
+      this.logger.log(`✅ MFA verification successful for user ${userId}`);
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      this.logger.error(`Failed to verify MFA code for user ${userId}`, error);
+      throw new BadRequestException(
+        `MFA verification failed: ${error.message}`,
+      );
+    }
+
+    // Step 2: Check document type exists
     const documentType = await this.documentTypeRepository.findOne({
       where: { document_type_id: dto.document_type_id },
     });
@@ -38,6 +78,7 @@ export class DocumentsService {
       throw new NotFoundException('Document type not found');
     }
 
+    // Step 3: Create document
     const document = this.documentRepository.create({
       user_id: userId,
       document_type_id: dto.document_type_id,
@@ -61,8 +102,41 @@ export class DocumentsService {
       `Manager ${issuerId} approving document ${documentId}`,
     );
 
-    const studentBlockchainId = dto.student_blockchain_id;
+    // Step 1: Verify MFA code for issuer (Manager/Admin)
+    this.logger.log(`Verifying MFA code for issuer ${issuerId}`);
+    try {
+      const mfaResult = await this.mfaService.verifyMfaCode(
+        issuerId,
+        dto.authenticator_code,
+      );
 
+      if (!mfaResult.is_valid) {
+        this.logger.warn(`MFA verification failed for issuer ${issuerId}: ${mfaResult.reason}`);
+        
+        if (mfaResult.locked_until) {
+          const lockedUntil = new Date(mfaResult.locked_until * 1000);
+          throw new UnauthorizedException(
+            `MFA verification failed. Account locked until ${lockedUntil.toISOString()}. Reason: ${mfaResult.reason}`,
+          );
+        }
+
+        throw new UnauthorizedException(
+          `MFA verification failed: ${mfaResult.reason || mfaResult.message}`,
+        );
+      }
+
+      this.logger.log(`✅ MFA verification successful for issuer ${issuerId}`);
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      this.logger.error(`Failed to verify MFA code for issuer ${issuerId}`, error);
+      throw new BadRequestException(
+        `MFA verification failed: ${error.message}`,
+      );
+    }
+
+    // Step 2: Get document
     const document = await this.documentRepository.findOne({
       where: { document_id: documentId },
       relations: ['documentType'],
@@ -75,6 +149,56 @@ export class DocumentsService {
     if (document.status !== DocumentStatus.DRAFT) {
       throw new BadRequestException(
         `Cannot approve document with status: ${document.status}. Only DRAFT documents can be approved.`,
+      );
+    }
+
+    // Step 3: Get student wallet address from document.user_id
+    this.logger.log(`Getting wallet address for user: ${document.user_id}`);
+    const wallet = await this.walletRepository.findOne({
+      where: { user_id: document.user_id },
+    });
+
+    if (!wallet) {
+      throw new NotFoundException(
+        `Wallet not found for user ${document.user_id}. Student must have a wallet registered.`,
+      );
+    }
+
+    if (!wallet.address) {
+      throw new BadRequestException(
+        `Wallet address is missing for user ${document.user_id}`,
+      );
+    }
+
+    const studentWalletAddress = wallet.address;
+    this.logger.log(`✅ Wallet address found: ${studentWalletAddress} for user ${document.user_id}`);
+
+    // Step 4: Get student blockchain ID from wallet address
+    let studentBlockchainId: number;
+    try {
+      studentBlockchainId = await this.blockchainService.getStudentIdByAddress(
+        studentWalletAddress,
+      );
+      this.logger.log(`✅ Student blockchain ID found: ${studentBlockchainId}`);
+
+      // Verify student is active
+      const studentInfo = await this.blockchainService.getStudentInfo(studentBlockchainId);
+      if (!studentInfo.isActive) {
+        throw new BadRequestException(
+          `Student with ID ${studentBlockchainId} is not active`,
+        );
+      }
+      this.logger.log(`✅ Student is active: ${studentInfo.fullName} (${studentInfo.studentCode})`);
+    } catch (error) {
+      this.logger.error(
+        `Failed to get student ID for wallet ${studentWalletAddress}`,
+        error,
+      );
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      throw new BadRequestException(
+        `Invalid student wallet address: ${error.message}`,
       );
     }
 
@@ -180,6 +304,48 @@ export class DocumentsService {
         `Failed to mint document on blockchain: ${error.message}`,
       );
     }
+  }
+
+  /**
+   * Get all documents with pagination and status filter (Manager/Admin only)
+   * Default sorted by created_at DESC (newest first)
+   */
+  async getAllDocuments(query: GetAllDocumentsQueryDto): Promise<PaginatedDocumentsResponse> {
+    const { page = 1, limit = 10, status, sort = 'created_at', order = 'DESC' } = query;
+
+    const queryBuilder = this.documentRepository
+      .createQueryBuilder('document')
+      .leftJoinAndSelect('document.documentType', 'documentType');
+
+    // Filter by status if provided
+    if (status) {
+      queryBuilder.andWhere('document.status = :status', { status });
+    }
+
+    // Validate sort field and apply sorting
+    const validSortFields = ['created_at', 'updated_at', 'issued_at'];
+    const sortField = validSortFields.includes(sort) ? sort : 'created_at';
+    const sortOrder = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+    queryBuilder.orderBy(`document.${sortField}`, sortOrder);
+
+    // Pagination
+    const skip = (page - 1) * limit;
+    queryBuilder.skip(skip).take(limit);
+
+    // Execute query
+    const [documents, total] = await queryBuilder.getManyAndCount();
+
+    const totalPages = Math.ceil(total / limit);
+
+    return {
+      data: documents,
+      total,
+      page,
+      limit,
+      totalPages,
+      hasNext: page < totalPages,
+      hasPrev: page > 1,
+    };
   }
 
   /**
