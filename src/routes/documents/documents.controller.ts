@@ -246,6 +246,32 @@ export class DocumentsController {
     return await this.documentsService.revokeDocument(documentId);
   }
 
+  @Get('certificate/preview')
+  @ApiOperation({
+    summary: 'Generate certificate preview (Public)',
+    description: 'Generate a sample certificate PDF using the configured template.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'PDF preview generated',
+    content: {
+      'application/pdf': {
+        schema: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+    },
+  })
+  async previewCertificate(@Res({ passthrough: true }) res: Response): Promise<StreamableFile> {
+    const buffer = await this.documentsService.generateCertificatePreview();
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': 'inline; filename="certificate-preview.pdf"',
+    });
+    return new StreamableFile(buffer);
+  }
+
 
   @Get('types/all')
   @ApiOperation({ 

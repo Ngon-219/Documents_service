@@ -17,13 +17,19 @@ export class DocumentType {
   document_type_name: string;
 
   @Column({ type: 'text', nullable: true })
-  description: string;
+  description: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  template_pdf: string | null;
 
   @CreateDateColumn()
   created_at: Date;
 
   @UpdateDateColumn()
   updated_at: Date;
+
+  @Column({ type: 'uuid', nullable: true })
+  created_by: string | null;
 
   @OneToMany(() => Document, (document) => document.documentType)
   documents: Document[];

@@ -455,6 +455,10 @@ export class DocumentsService {
     return await this.documentTypeRepository.find();
   }
 
+  async generateCertificatePreview(): Promise<Buffer> {
+    return await this.pdfService.generateCertificate();
+  }
+
   /**
    * Get PDF file from IPFS
    * @param documentId Document UUID

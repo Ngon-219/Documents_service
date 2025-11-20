@@ -1,7 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import PDFDocument from 'pdfkit';
 import { Document } from '../entities/document.entity';
 import { DocumentType } from '../entities/document-type.entity';
+import { Font, Template } from "@pdfme/common";
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { generate } from '@pdfme/generator';
+import fs from 'fs';
+import { BLANK_PDF } from '@pdfme/common';
+import path from 'path';
 
 interface DocumentData {
   document: Document;
@@ -13,6 +20,14 @@ interface DocumentData {
 @Injectable()
 export class PdfServiceService {
   private readonly logger = new Logger(PdfServiceService.name);
+
+  /**
+   *
+   */
+  constructor(
+    @InjectRepository(DocumentType)
+    private documentTypeRepository: Repository<DocumentType>,
+  ) {}
 
   async generatePdf(data: DocumentData): Promise<Buffer> {
     return new Promise((resolve, reject) => {
@@ -235,5 +250,94 @@ export class PdfServiceService {
       .replace(/([A-Z])/g, ' $1')
       .replace(/^./, (str) => str.toUpperCase())
       .trim();  
+  }
+
+  async generateCertificate(): Promise<Buffer> {
+    const pdf_template: Template = this.loadTemplateFromFile();
+    pdf_template.basePdf = pdf_template.basePdf || BLANK_PDF;
+
+    const fonts = this.loadFonts();
+    const defaultFontName = Object.keys(fonts)[0];
+    if (defaultFontName) {
+      this.applyDefaultFont(pdf_template, defaultFontName);
+    }
+
+    const inputs = [
+      {
+        "subtitile": "CHỨNG NHẬN THỰC TẬP",
+        "signature": "VŨ CÔNG NGÔN",
+        "details": "CHỨNG NHẬN BẠN QUÁ ĐẸP TRAI",
+        "from1-1": "Truong khoa",
+        "from1-2": "Vu Cong Ngon",
+        "from2-1": "Ahii",
+        "from2-2": "ahihi"
+      }
+    ];
+
+    const pdf_generate = await generate({ template: pdf_template, inputs, options: { font: fonts } });
+    const pdfBuffer = Buffer.from(pdf_generate);
+    fs.writeFileSync('pdf_generate.pdf', pdfBuffer);
+    return pdfBuffer;
+  }
+
+  private loadTemplateFromFile(): Template {
+    const templatePath = this.resolveTemplatePath();
+    const templateContent = fs.readFileSync(templatePath, 'utf-8');
+    return JSON.parse(templateContent) as Template;
+  }
+
+  private resolveTemplatePath(): string {
+    const candidates = [
+      path.join(__dirname, 'template', 'template.json'),
+      path.join(process.cwd(), 'src', 'pdf_service', 'template', 'template.json'),
+    ];
+
+    const foundPath = candidates.find((candidate) => fs.existsSync(candidate));
+
+    if (!foundPath) {
+      throw new NotFoundException('Certificate template file not found');
+    }
+
+    return foundPath;
+  }
+
+  private loadFonts(): Font {
+    const googleSans = this.readFontFile('GoogleSansFlex-VariableFont_GRAD,ROND,opsz,slnt,wdth,wght.ttf');
+
+    return {
+      GoogleSansFlex: {
+        data: googleSans,
+        fallback: true,
+      },
+    };
+  }
+
+  private readFontFile(fileName: string): ArrayBuffer {
+    const candidates = [
+      path.join(__dirname, 'fonts', fileName),
+      path.join(process.cwd(), 'src', 'pdf_service', 'fonts', fileName),
+    ];
+
+    const foundPath = candidates.find((candidate) => fs.existsSync(candidate));
+
+    if (!foundPath) {
+      throw new NotFoundException(`Font file ${fileName} not found`);
+    }
+
+    const fileBuffer = fs.readFileSync(foundPath);
+    return fileBuffer.buffer.slice(
+      fileBuffer.byteOffset,
+      fileBuffer.byteOffset + fileBuffer.byteLength,
+    );
+  }
+
+  private applyDefaultFont(template: Template, fontName: string) {
+    template.schemas?.forEach((schemaRow) => {
+      schemaRow.forEach((schemaItem: any) => {
+        if (schemaItem.type === 'text') {
+          schemaItem.fontName = fontName;
+        }
+      });
+    });
   }
 }

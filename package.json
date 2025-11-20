@@ -35,6 +35,8 @@
     "@nestjs/platform-express": "^10.0.0",
     "@nestjs/swagger": "^7.4.2",
     "@nestjs/typeorm": "^10.0.2",
+    "@pdfme/common": "^5.4.8",
+    "@pdfme/generator": "^5.4.8",
     "@types/ioredis": "^4.28.10",
     "@types/pdfkit": "^0.17.3",
     "class-transformer": "^0.5.1",
