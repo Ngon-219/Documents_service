@@ -246,31 +246,31 @@ export class DocumentsController {
     return await this.documentsService.revokeDocument(documentId);
   }
 
-  @Get('certificate/preview')
-  @ApiOperation({
-    summary: 'Generate certificate preview (Public)',
-    description: 'Generate a sample certificate PDF using the configured template.',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'PDF preview generated',
-    content: {
-      'application/pdf': {
-        schema: {
-          type: 'string',
-          format: 'binary',
-        },
-      },
-    },
-  })
-  async previewCertificate(@Res({ passthrough: true }) res: Response): Promise<StreamableFile> {
-    const buffer = await this.documentsService.generateCertificatePreview();
-    res.set({
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': 'inline; filename="certificate-preview.pdf"',
-    });
-    return new StreamableFile(buffer);
-  }
+  // @Get('certificate/preview')
+  // @ApiOperation({
+  //   summary: 'Generate certificate preview (Public)',
+  //   description: 'Generate a sample certificate PDF using the configured template.',
+  // })
+  // @ApiResponse({
+  //   status: 200,
+  //   description: 'PDF preview generated',
+  //   content: {
+  //     'application/pdf': {
+  //       schema: {
+  //         type: 'string',
+  //         format: 'binary',
+  //       },
+  //     },
+  //   },
+  // })
+  // async previewCertificate(@Res({ passthrough: true }) res: Response): Promise<StreamableFile> {
+  //   const buffer = await this.documentsService.generateCertificatePreview();
+  //   res.set({
+  //     'Content-Type': 'application/pdf',
+  //     'Content-Disposition': 'inline; filename="certificate-preview.pdf"',
+  //   });
+  //   return new StreamableFile(buffer);
+  // }
 
 
   @Get('types/all')
@@ -291,42 +291,42 @@ export class DocumentsController {
    * GET /documents/:id/pdf
    * Auth: Authenticated users
    */
-  @Get(':id/pdf')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth('JWT-auth')
-  @ApiOperation({ 
-    summary: 'Download document PDF', 
-    description: 'Download the PDF certificate for a document from IPFS' 
-  })
-  @ApiParam({ name: 'id', description: 'Document UUID' })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'PDF file',
-    content: {
-      'application/pdf': {
-        schema: {
-          type: 'string',
-          format: 'binary',
-        },
-      },
-    },
-  })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 404, description: 'Document or PDF not found' })
-  async downloadPdf(
-    @Param('id') documentId: string,
-    @Res({ passthrough: true }) res: Response,
-  ): Promise<StreamableFile> {
-    const { buffer, ipfsHash } = await this.documentsService.getDocumentPdf(documentId);
+  // @Get(':id/pdf')
+  // @UseGuards(JwtAuthGuard)
+  // @ApiBearerAuth('JWT-auth')
+  // @ApiOperation({ 
+  //   summary: 'Download document PDF', 
+  //   description: 'Download the PDF certificate for a document from IPFS' 
+  // })
+  // @ApiParam({ name: 'id', description: 'Document UUID' })
+  // @ApiResponse({ 
+  //   status: 200, 
+  //   description: 'PDF file',
+  //   content: {
+  //     'application/pdf': {
+  //       schema: {
+  //         type: 'string',
+  //         format: 'binary',
+  //       },
+  //     },
+  //   },
+  // })
+  // @ApiResponse({ status: 401, description: 'Unauthorized' })
+  // @ApiResponse({ status: 404, description: 'Document or PDF not found' })
+  // async downloadPdf(
+  //   @Param('id') documentId: string,
+  //   @Res({ passthrough: true }) res: Response,
+  // ): Promise<StreamableFile> {
+  //   const { buffer, ipfsHash } = await this.documentsService.getDocumentPdf(documentId);
     
-    // Set response headers
-    res.set({
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="document-${documentId}.pdf"`,
-      'X-IPFS-Hash': ipfsHash,
-    });
+  //   // Set response headers
+  //   res.set({
+  //     'Content-Type': 'application/pdf',
+  //     'Content-Disposition': `attachment; filename="document-${documentId}.pdf"`,
+  //     'X-IPFS-Hash': ipfsHash,
+  //   });
     
-    return new StreamableFile(buffer);
-  }
+  //   return new StreamableFile(buffer);
+  // }
 }
 

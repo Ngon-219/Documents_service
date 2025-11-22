@@ -4,39 +4,33 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
-  OneToOne,
+  ManyToOne,
   JoinColumn,
 } from 'typeorm';
 import { User } from './user.entity';
 
-@Entity('wallet')
-export class Wallet {
+@Entity('otp_verify')
+export class OtpVerify {
   @PrimaryGeneratedColumn('uuid')
-  wallet_id: string;
+  otp_id: string;
 
-  @Column({ type: 'uuid', unique: true })
+  @Column({ type: 'uuid' })
   user_id: string;
 
-  @Column({ type: 'varchar', length: 42 })
-  address: string;
-
-  @Column({ type: 'text' })
-  private_key: string;
+  @Column({ type: 'varchar' })
+  otp_code: string;
 
   @Column({ type: 'varchar' })
-  chain_type: string;
-
-  @Column({ type: 'text' })
-  public_key: string;
+  email: string;
 
   @Column({ type: 'varchar' })
-  status: string;
+  purpose: string;
 
-  @Column({ type: 'varchar' })
-  network_id: string;
+  @Column({ type: 'boolean' })
+  is_verified: boolean;
 
-  @Column({ type: 'timestamp', nullable: true })
-  last_used_at: Date;
+  @Column({ type: 'timestamp' })
+  expires_at: Date;
 
   @CreateDateColumn()
   created_at: Date;
@@ -45,7 +39,7 @@ export class Wallet {
   updated_at: Date;
 
   // Relations
-  @OneToOne(() => User, (user) => user.wallet)
+  @ManyToOne(() => User, (user) => user.otpVerifies)
   @JoinColumn({ name: 'user_id' })
   user: User;
 }

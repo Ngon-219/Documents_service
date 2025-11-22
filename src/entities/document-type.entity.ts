@@ -5,8 +5,12 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToMany,
+  ManyToOne,
+  JoinColumn,
 } from 'typeorm';
 import { Document } from './document.entity';
+import { User } from './user.entity';
+import { Certificate } from './certificate.entity';
 
 @Entity('document_type')
 export class DocumentType {
@@ -31,7 +35,15 @@ export class DocumentType {
   @Column({ type: 'uuid', nullable: true })
   created_by: string | null;
 
+  // Relations
   @OneToMany(() => Document, (document) => document.documentType)
   documents: Document[];
+
+  @OneToMany(() => Certificate, (certificate) => certificate.documentType)
+  certificates: Certificate[];
+
+  @ManyToOne(() => User, (user) => user.documentTypes)
+  @JoinColumn({ name: 'created_by' })
+  user: User | null;
 }
 

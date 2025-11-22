@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import { ethers } from 'ethers';
 import { RequestDocumentDto, ApproveDocumentDto, GetAllDocumentsQueryDto, PaginatedDocumentsResponse } from './dto';
 import { MfaService } from '../../grpc/mfa.service';
+import { User } from 'src/entities/user.entity';
 
 @Injectable()
 export class DocumentsService {
@@ -23,6 +24,8 @@ export class DocumentsService {
     private documentTypeRepository: Repository<DocumentType>,
     @InjectRepository(Wallet)
     private walletRepository: Repository<Wallet>,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
     private blockchainService: BlockchainService,
     private ipfsService: IPFSService,
     private pdfService: PdfServiceService,
@@ -102,6 +105,14 @@ export class DocumentsService {
       `Manager ${issuerId} approving document ${documentId}`,
     );
 
+    let issuer_info = await this.userRepository.findOne({
+      where: {user_id: issuerId}
+    });
+
+    if (!issuer_info) {
+      throw new NotFoundException("User Not Found");
+    }
+
     // Step 1: Verify MFA code for issuer (Manager/Admin)
     this.logger.log(`Verifying MFA code for issuer ${issuerId}`);
     try {
@@ -171,10 +182,25 @@ export class DocumentsService {
     }
 
     const studentWalletAddress = wallet.address;
+    
+    // Join user with wallet to get student info using wallet address
+    let student_info_db = await this.userRepository
+      .createQueryBuilder('user')
+      .innerJoin('user.wallet', 'wallet')
+      .where('wallet.address = :address', { address: studentWalletAddress })
+      .getOne();
+    
+    if (!student_info_db) {
+      throw new NotFoundException(
+        `Student info not found for wallet address ${studentWalletAddress}`,
+      );
+    }
+    
     this.logger.log(`✅ Wallet address found: ${studentWalletAddress} for user ${document.user_id}`);
 
     // Step 4: Get student blockchain ID from wallet address
     let studentBlockchainId: number;
+    let studentInfo: any;
     try {
       studentBlockchainId = await this.blockchainService.getStudentIdByAddress(
         studentWalletAddress,
@@ -182,7 +208,7 @@ export class DocumentsService {
       this.logger.log(`✅ Student blockchain ID found: ${studentBlockchainId}`);
 
       // Verify student is active
-      const studentInfo = await this.blockchainService.getStudentInfo(studentBlockchainId);
+      studentInfo = await this.blockchainService.getStudentInfo(studentBlockchainId);
       if (!studentInfo.isActive) {
         throw new BadRequestException(
           `Student with ID ${studentBlockchainId} is not active`,
@@ -215,7 +241,8 @@ export class DocumentsService {
       const pdfBuffer = await this.pdfService.generatePdf({
         document,
         documentType: document.documentType,
-        // You can add student/issuer names from auth service if needed
+        issuerName: issuer_info.first_name + " " + issuer_info.last_name,
+        studentName: student_info_db.last_name + " " + student_info_db.first_name,
       });
 
       // Step 2: Upload PDF to IPFS
@@ -455,77 +482,103 @@ export class DocumentsService {
     return await this.documentTypeRepository.find();
   }
 
-  async generateCertificatePreview(): Promise<Buffer> {
-    return await this.pdfService.generateCertificate();
-  }
+  // async generateCertificatePreview(): Promise<Buffer> {
+  //   // Get the first available document type for preview
+  //   const documentTypes = await this.documentTypeRepository.find({
+  //     take: 1,
+  //   });
+    
+  //   const documentType = documentTypes[0];
+
+  //   if (!documentType) {
+  //     throw new NotFoundException('No document types available for preview');
+  //   }
+
+  //   // Create mock data for preview
+  //   const mockDocument = this.documentRepository.create({
+  //     document_id: 'preview',
+  //     user_id: 'preview',
+  //     document_type_id: documentType.document_type_id,
+  //     metadata: { preview: true },
+  //   });
+
+  //   const mockData = {
+  //     document: mockDocument,
+  //     documentType: documentType,
+  //     studentName: 'Nguyễn Văn A',
+  //     issuerName: 'Hệ thống một cửa',
+  //   };
+
+  //   return await this.pdfService.generateCertificate(mockData, documentType.document_type_id);
+  // }
 
   /**
    * Get PDF file from IPFS
    * @param documentId Document UUID
    * @returns PDF buffer and IPFS hash
    */
-  async getDocumentPdf(documentId: string): Promise<{ buffer: Buffer; ipfsHash: string }> {
-    const document = await this.documentRepository.findOne({
-      where: { document_id: documentId },
-    });
+  // async getDocumentPdf(documentId: string): Promise<{ buffer: Buffer; ipfsHash: string }> {
+  //   const document = await this.documentRepository.findOne({
+  //     where: { document_id: documentId },
+  //   });
 
-    if (!document) {
-      throw new NotFoundException('Document not found');
-    }
+  //   if (!document) {
+  //     throw new NotFoundException('Document not found');
+  //   }
 
-    if (!document.pdf_ipfs_hash) {
-      throw new NotFoundException('PDF not available for this document');
-    }
+  //   if (!document.pdf_ipfs_hash) {
+  //     throw new NotFoundException('PDF not available for this document');
+  //   }
 
-    // For mock mode, we can regenerate the PDF
-    if (this.configService.get<string>('USE_MOCK_IPFS') === 'true') {
-      this.logger.warn('Mock mode: Regenerating PDF instead of downloading from IPFS');
-      const documentWithRelations = await this.documentRepository.findOne({
-        where: { document_id: documentId },
-        relations: ['documentType'],
-      });
+  //   // For mock mode, we can regenerate the PDF
+  //   if (this.configService.get<string>('USE_MOCK_IPFS') === 'true') {
+  //     this.logger.warn('Mock mode: Regenerating PDF instead of downloading from IPFS');
+  //     const documentWithRelations = await this.documentRepository.findOne({
+  //       where: { document_id: documentId },
+  //       relations: ['documentType'],
+  //     });
       
-      if (!documentWithRelations) {
-        throw new NotFoundException('Document not found');
-      }
+  //     if (!documentWithRelations) {
+  //       throw new NotFoundException('Document not found');
+  //     }
       
-      const pdfBuffer = await this.pdfService.generatePdf({
-        document: documentWithRelations,
-        documentType: documentWithRelations.documentType,
-      });
+  //     const pdfBuffer = await this.pdfService.generatePdf({
+  //       document: documentWithRelations,
+  //       documentType: documentWithRelations.documentType,
+  //     });
       
-      return {
-        buffer: pdfBuffer,
-        ipfsHash: document.pdf_ipfs_hash,
-      };
-    }
+  //     return {
+  //       buffer: pdfBuffer,
+  //       ipfsHash: document.pdf_ipfs_hash,
+  //     };
+  //   }
 
-    // Download from IPFS
-    try {
-      const gateway = this.configService.get<string>('PINATA_GATEWAY') || 'gateway.pinata.cloud';
-      const url = `https://${gateway}/ipfs/${document.pdf_ipfs_hash}`;
+  //   // Download from IPFS
+  //   try {
+  //     const gateway = this.configService.get<string>('PINATA_GATEWAY') || 'gateway.pinata.cloud';
+  //     const url = `https://${gateway}/ipfs/${document.pdf_ipfs_hash}`;
       
-      this.logger.log(`Downloading PDF from IPFS: ${url}`);
+  //     this.logger.log(`Downloading PDF from IPFS: ${url}`);
       
-      const response = await fetch(url);
+  //     const response = await fetch(url);
       
-      if (!response.ok) {
-        throw new Error(`Failed to download PDF: ${response.statusText}`);
-      }
+  //     if (!response.ok) {
+  //       throw new Error(`Failed to download PDF: ${response.statusText}`);
+  //     }
       
-      const arrayBuffer = await response.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
+  //     const arrayBuffer = await response.arrayBuffer();
+  //     const buffer = Buffer.from(arrayBuffer);
       
-      this.logger.log(`✅ PDF downloaded successfully (${buffer.length} bytes)`);
+  //     this.logger.log(`✅ PDF downloaded successfully (${buffer.length} bytes)`);
       
-      return {
-        buffer,
-        ipfsHash: document.pdf_ipfs_hash,
-      };
-    } catch (error) {
-      this.logger.error(`❌ Failed to download PDF from IPFS`, error);
-      throw new BadRequestException(`Failed to download PDF: ${error.message}`);
-    }
-  }
+  //     return {
+  //       buffer,
+  //       ipfsHash: document.pdf_ipfs_hash,
+  //     };
+  //   } catch (error) {
+  //     this.logger.error(`❌ Failed to download PDF from IPFS`, error);
+  //     throw new BadRequestException(`Failed to download PDF: ${error.message}`);
+  //   }
+  // }
 }
 
