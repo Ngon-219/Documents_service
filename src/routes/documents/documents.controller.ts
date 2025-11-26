@@ -23,7 +23,7 @@ import {
 } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { DocumentsService } from './documents.service';
-import { RequestDocumentDto, ApproveDocumentDto, DocumentResponse, VerifyDocumentResponse, GetAllDocumentsQueryDto, PaginatedDocumentsResponse } from './dto';
+import { RequestDocumentDto, ApproveDocumentDto, RejectDocumentDto, DocumentResponse, VerifyDocumentResponse, GetAllDocumentsQueryDto, PaginatedDocumentsResponse } from './dto';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
 import { Roles, UserRole } from '../../auth/decorators/roles.decorator';
@@ -99,6 +99,31 @@ export class DocumentsController {
   ) {
     const issuer_id = request.user.userId;
     return await this.documentsService.approveAndSignDocument(documentId, issuer_id, dto);
+  }
+
+  @Put(':id/reject')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.MANAGER, UserRole.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Reject a pending document request',
+    description: 'Manager/Admin rejects a document before issuance and records a reason.',
+  })
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiBody({ type: RejectDocumentDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Document rejected successfully',
+    type: DocumentResponse,
+  })
+  async rejectDocument(
+    @Param('id') documentId: string,
+    @Body() dto: RejectDocumentDto,
+    @Req() request: RequestWithUser,
+  ) {
+    const issuer_id = request.user.userId;
+    return await this.documentsService.rejectDocument(documentId, issuer_id, dto);
   }
 
   /**

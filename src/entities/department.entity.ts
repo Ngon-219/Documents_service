@@ -33,3 +33,4 @@ export class Department {
   majors: Major[];
 }
 
+

@@ -40,3 +40,4 @@ export class Major {
   userMajors: UserMajor[];
 }
 
+

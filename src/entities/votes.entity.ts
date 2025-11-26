@@ -46,3 +46,4 @@ export class Vote {
   votingEvent: VotingEvents;
 }
 
+

@@ -1,17 +1,19 @@
-import { Injectable, Logger, NotFoundException, BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException, UnauthorizedException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DeepPartial } from 'typeorm';
 import { Document, DocumentStatus } from '../../entities/document.entity';
 import { DocumentType } from '../../entities/document-type.entity';
 import { Wallet } from '../../entities/wallet.entity';
 import { BlockchainService } from '../../blockchain/blockchain.service';
 import { IPFSService } from '../../blockchain/ipfs.service';
-import { PdfServiceService } from '../../pdf_service/pdf_service.service';
+import { DocumentData, PdfServiceService, PdfTemplatePayload } from '../../pdf_service/pdf_service.service';
 import { ConfigService } from '@nestjs/config';
 import { ethers } from 'ethers';
-import { RequestDocumentDto, ApproveDocumentDto, GetAllDocumentsQueryDto, PaginatedDocumentsResponse } from './dto';
+import { RequestDocumentDto, ApproveDocumentDto, RejectDocumentDto, GetAllDocumentsQueryDto, PaginatedDocumentsResponse } from './dto';
 import { MfaService } from '../../grpc/mfa.service';
 import { User } from 'src/entities/user.entity';
+import { Certificate } from 'src/entities/certificate.entity';
+import { ScoreBoard } from '../../entities/score-board.entity';
 
 @Injectable()
 export class DocumentsService {
@@ -26,6 +28,10 @@ export class DocumentsService {
     private walletRepository: Repository<Wallet>,
     @InjectRepository(User)
     private userRepository: Repository<User>,
+    @InjectRepository(Certificate)
+    private certificateReposioty: Repository<Certificate>,
+    @InjectRepository(ScoreBoard)
+    private scoreBoardRepository: Repository<ScoreBoard>,
     private blockchainService: BlockchainService,
     private ipfsService: IPFSService,
     private pdfService: PdfServiceService,
@@ -38,7 +44,14 @@ export class DocumentsService {
       `Student ${userId} requesting document type ${dto.document_type_id}`,
     );
 
-    // Step 1: Verify MFA code
+    let userInfor = await this.userRepository.findOne({
+      where: {user_id: userId}
+    });
+
+    if (!userInfor) {
+      throw new UnauthorizedException('User not found');
+    }
+
     this.logger.log(`Verifying MFA code for user ${userId}`);
     try {
       const mfaResult = await this.mfaService.verifyMfaCode(
@@ -51,19 +64,19 @@ export class DocumentsService {
         
         if (mfaResult.locked_until) {
           const lockedUntil = new Date(mfaResult.locked_until * 1000);
-          throw new UnauthorizedException(
+          throw new ForbiddenException(
             `MFA verification failed. Account locked until ${lockedUntil.toISOString()}. Reason: ${mfaResult.reason}`,
           );
         }
 
-        throw new UnauthorizedException(
+        throw new ForbiddenException(
           `MFA verification failed: ${mfaResult.reason || mfaResult.message}`,
         );
       }
 
       this.logger.log(`✅ MFA verification successful for user ${userId}`);
     } catch (error) {
-      if (error instanceof UnauthorizedException) {
+      if (error instanceof ForbiddenException) {
         throw error;
       }
       this.logger.error(`Failed to verify MFA code for user ${userId}`, error);
@@ -72,7 +85,6 @@ export class DocumentsService {
       );
     }
 
-    // Step 2: Check document type exists
     const documentType = await this.documentTypeRepository.findOne({
       where: { document_type_id: dto.document_type_id },
     });
@@ -81,17 +93,147 @@ export class DocumentsService {
       throw new NotFoundException('Document type not found');
     }
 
-    // Step 3: Create document
-    const document = this.documentRepository.create({
+    let pdfTemplate: PdfTemplatePayload | null = null;
+
+    switch (documentType.document_type_name) {
+      case 'Certificate':
+      case 'Diploma': {
+        let my_cerfificate = await this.certificateReposioty.findOne({
+          where: { certificate_id: dto.certificate_id },
+        });
+
+        if (!my_cerfificate) {
+          throw new NotFoundException('certificate type not found');
+        }
+
+        const documenType = await this.documentTypeRepository.findOne({
+          where: { document_type_id: my_cerfificate?.document_type_id },
+        });
+
+        if (!documenType) {
+          throw new NotFoundException('document type not found');
+        }
+
+        const data: DocumentData = {
+          documentTypeName: documenType.document_type_name,
+          issuerName: '',
+          studentName: `${userInfor.last_name} ${userInfor.first_name}`,
+          description: my_cerfificate?.description || '',
+          expiry_date: my_cerfificate.expiry_date?.toString() || '',
+          issued_date: my_cerfificate.issued_date?.toString() || '',
+          metadata: my_cerfificate?.metadata || {},
+          documentType: documentType,
+          qr_code: '',
+        };
+
+        pdfTemplate = await this.pdfService.generateCertificate(data);
+        break;
+      }
+
+      case 'Transcript': {
+        const scoreBoards = await this.scoreBoardRepository.find({
+          where: { user_id: userId },
+          order: {
+            academic_year: 'ASC',
+            semester: 'ASC',
+            course_name: 'ASC',
+          },
+        });
+
+        if (!scoreBoards.length) {
+          throw new NotFoundException('scoreboard not found for this student');
+        }
+
+        const transcriptRows = scoreBoards.map((score) => {
+          const finalScore =
+            score.score6 ??
+            score.score5 ??
+            score.score4 ??
+            score.score3 ??
+            score.score2 ??
+            score.score1 ??
+            null;
+
+          return {
+            courseName: score.course_name,
+            courseCode: score.course_code,
+            credits: score.credits,
+            semester: score.semester,
+            academicYear: score.academic_year,
+            finalScore,
+            letterGrade: score.letter_grade,
+            status: score.status,
+            rawScores: {
+              score1: score.score1,
+              score2: score.score2,
+              score3: score.score3,
+              score4: score.score4,
+              score5: score.score5,
+              score6: score.score6,
+            },
+            metadata: score.metadata,
+          };
+        });
+
+        const totalCredits = transcriptRows.reduce(
+          (sum, row) => sum + (row.credits || 0),
+          0,
+        );
+
+        const weightedScore = transcriptRows.reduce((sum, row) => {
+          if (typeof row.finalScore === 'number') {
+            return sum + row.finalScore * (row.credits || 0);
+          }
+          return sum;
+        }, 0);
+
+        const gpa =
+          totalCredits > 0
+            ? Number((weightedScore / totalCredits).toFixed(2))
+            : null;
+
+        const transcriptMetadata = {
+          ...(dto.metadata || {}),
+          scoreboard: transcriptRows,
+          summary: {
+            totalCredits,
+            gpa,
+            totalSubjects: transcriptRows.length,
+          },
+        };
+
+        const data: DocumentData = {
+          documentTypeName: documentType.document_type_name,
+          issuerName: '',
+          studentName: `${userInfor.last_name} ${userInfor.first_name}`,
+          description: 'Bảng điểm tổng hợp',
+          expiry_date: '',
+          issued_date: new Date().toISOString(),
+          metadata: transcriptMetadata,
+          documentType,
+          qr_code: '',
+        };
+
+        pdfTemplate = await this.pdfService.generateTranscript(data);
+        break;
+      }
+    }
+
+    const documentPayload: DeepPartial<Document> = {
       user_id: userId,
       document_type_id: dto.document_type_id,
       issuer_id: userId,
       metadata: dto.metadata || {},
+      pdf_schema: pdfTemplate
+        ? (pdfTemplate as unknown as Record<string, any>)
+        : undefined,
       status: DocumentStatus.DRAFT,
       is_valid: false,
       contract_address:
         this.configService.get<string>('ISSUANCE_CONTRACT_ADDRESS'),
-    });
+    };
+
+    const document = this.documentRepository.create(documentPayload);
 
     return await this.documentRepository.save(document);
   }
@@ -101,19 +243,16 @@ export class DocumentsService {
     issuerId: string,
     dto: ApproveDocumentDto,
   ): Promise<Document> {
-    this.logger.log(
-      `Manager ${issuerId} approving document ${documentId}`,
-    );
+    this.logger.log(`Manager ${issuerId} approving document ${documentId}`);
 
-    let issuer_info = await this.userRepository.findOne({
-      where: {user_id: issuerId}
+    const issuer_info = await this.userRepository.findOne({
+      where: { user_id: issuerId },
     });
 
     if (!issuer_info) {
-      throw new NotFoundException("User Not Found");
+      throw new NotFoundException('Issuer not found');
     }
 
-    // Step 1: Verify MFA code for issuer (Manager/Admin)
     this.logger.log(`Verifying MFA code for issuer ${issuerId}`);
     try {
       const mfaResult = await this.mfaService.verifyMfaCode(
@@ -122,32 +261,38 @@ export class DocumentsService {
       );
 
       if (!mfaResult.is_valid) {
-        this.logger.warn(`MFA verification failed for issuer ${issuerId}: ${mfaResult.reason}`);
-        
+        this.logger.warn(
+          `MFA verification failed for issuer ${issuerId}: ${mfaResult.reason}`,
+        );
+
         if (mfaResult.locked_until) {
           const lockedUntil = new Date(mfaResult.locked_until * 1000);
-          throw new UnauthorizedException(
+          throw new ForbiddenException(
             `MFA verification failed. Account locked until ${lockedUntil.toISOString()}. Reason: ${mfaResult.reason}`,
           );
         }
 
-        throw new UnauthorizedException(
+        throw new ForbiddenException(
           `MFA verification failed: ${mfaResult.reason || mfaResult.message}`,
         );
       }
 
-      this.logger.log(`✅ MFA verification successful for issuer ${issuerId}`);
+      this.logger.log(
+        `✅ MFA verification successful for issuer ${issuerId}`,
+      );
     } catch (error) {
-      if (error instanceof UnauthorizedException) {
+      if (error instanceof ForbiddenException) {
         throw error;
       }
-      this.logger.error(`Failed to verify MFA code for issuer ${issuerId}`, error);
+      this.logger.error(
+        `Failed to verify MFA code for issuer ${issuerId}`,
+        error,
+      );
       throw new BadRequestException(
         `MFA verification failed: ${error.message}`,
       );
     }
 
-    // Step 2: Get document
     const document = await this.documentRepository.findOne({
       where: { document_id: documentId },
       relations: ['documentType'],
@@ -157,13 +302,15 @@ export class DocumentsService {
       throw new NotFoundException('Document not found');
     }
 
-    if (document.status !== DocumentStatus.DRAFT) {
+    if (
+      document.status !== DocumentStatus.DRAFT &&
+      document.status !== DocumentStatus.PENDING_APPROVAL
+    ) {
       throw new BadRequestException(
-        `Cannot approve document with status: ${document.status}. Only DRAFT documents can be approved.`,
+        `Cannot approve document with status: ${document.status}. Only DRAFT or PENDING_APPROVAL documents can be approved.`,
       );
     }
 
-    // Step 3: Get student wallet address from document.user_id
     this.logger.log(`Getting wallet address for user: ${document.user_id}`);
     const wallet = await this.walletRepository.findOne({
       where: { user_id: document.user_id },
@@ -182,39 +329,42 @@ export class DocumentsService {
     }
 
     const studentWalletAddress = wallet.address;
-    
-    // Join user with wallet to get student info using wallet address
-    let student_info_db = await this.userRepository
+    const student_info_db = await this.userRepository
       .createQueryBuilder('user')
       .innerJoin('user.wallet', 'wallet')
       .where('wallet.address = :address', { address: studentWalletAddress })
       .getOne();
-    
+
     if (!student_info_db) {
       throw new NotFoundException(
         `Student info not found for wallet address ${studentWalletAddress}`,
       );
     }
-    
-    this.logger.log(`✅ Wallet address found: ${studentWalletAddress} for user ${document.user_id}`);
 
-    // Step 4: Get student blockchain ID from wallet address
+    this.logger.log(
+      `✅ Wallet address found: ${studentWalletAddress} for user ${document.user_id}`,
+    );
+
     let studentBlockchainId: number;
     let studentInfo: any;
     try {
-      studentBlockchainId = await this.blockchainService.getStudentIdByAddress(
-        studentWalletAddress,
-      );
+      studentBlockchainId =
+        await this.blockchainService.getStudentIdByAddress(
+          studentWalletAddress,
+        );
       this.logger.log(`✅ Student blockchain ID found: ${studentBlockchainId}`);
 
-      // Verify student is active
-      studentInfo = await this.blockchainService.getStudentInfo(studentBlockchainId);
+      studentInfo = await this.blockchainService.getStudentInfo(
+        studentBlockchainId,
+      );
       if (!studentInfo.isActive) {
         throw new BadRequestException(
           `Student with ID ${studentBlockchainId} is not active`,
         );
       }
-      this.logger.log(`✅ Student is active: ${studentInfo.fullName} (${studentInfo.studentCode})`);
+      this.logger.log(
+        `✅ Student is active: ${studentInfo.fullName} (${studentInfo.studentCode})`,
+      );
     } catch (error) {
       this.logger.error(
         `Failed to get student ID for wallet ${studentWalletAddress}`,
@@ -228,67 +378,136 @@ export class DocumentsService {
       );
     }
 
-    // Update to pending blockchain
     document.status = DocumentStatus.PENDING_BLOCKCHAIN;
     document.issuer_id = issuerId;
     await this.documentRepository.save(document);
 
+    const currentPdfSchema = document.pdf_schema as
+      | PdfTemplatePayload
+      | undefined;
+
+    let pdfPayload: PdfTemplatePayload | null = null;
+
+    if (dto.json_template) {
+      try {
+        const parsedTemplate = JSON.parse(dto.json_template);
+        if (parsedTemplate.template && parsedTemplate.inputs) {
+          pdfPayload = parsedTemplate;
+        } else {
+          pdfPayload = {
+            template: parsedTemplate.template ?? parsedTemplate,
+            inputs:
+              parsedTemplate.inputs ??
+              currentPdfSchema?.inputs ??
+              [],
+          };
+        }
+      } catch (error) {
+        this.logger.error('Failed to parse json_template', error);
+        throw new BadRequestException(
+          'json_template must be valid JSON string',
+        );
+      }
+    } else if (currentPdfSchema) {
+      pdfPayload = currentPdfSchema;
+    }
+
+    if (!pdfPayload?.template) {
+      throw new BadRequestException('PDF template schema is missing');
+    }
+
+    if (!pdfPayload.inputs || pdfPayload.inputs.length === 0) {
+      throw new BadRequestException(
+        'PDF template inputs are missing. Please provide inputs when requesting document.',
+      );
+    }
+
+    const isSimpleTemplate =
+      document.documentType.document_type_name === 'Certificate' ||
+      document.documentType.document_type_name === 'Diploma';
+
+    // For Certificate & Diploma: keep all fields except we still enforce QR_CODE = document_id.
+    // For other types (e.g. Transcript), also enrich with student/issuer info.
+    pdfPayload.inputs = pdfPayload.inputs.map((input) => {
+      const updated = { ...input };
+
+      if (!isSimpleTemplate) {
+        if ('studentName' in updated) {
+          updated.studentName = `${student_info_db.last_name} ${student_info_db.first_name}`;
+        }
+        if ('issuerName' in updated) {
+          updated.issuerName = `${issuer_info.first_name} ${issuer_info.last_name}`;
+        }
+        if ('signature' in updated) {
+          updated.signature = `${issuer_info.first_name} ${issuer_info.last_name}`;
+        }
+        if ('details' in updated && document.metadata) {
+          updated.details =
+            typeof document.metadata === 'object'
+              ? JSON.stringify(document.metadata)
+              : document.metadata;
+        }
+      }
+
+      // Always make QR code carry document_id if the field exists in template
+      if ('QR_CODE' in updated) {
+        updated.QR_CODE = document.document_id;
+      }
+
+      return updated;
+    });
+
+    document.pdf_schema = pdfPayload as Record<string, any>;
+    await this.documentRepository.save(document);
+
     try {
-      this.logger.log(`Starting blockchain process for document ${documentId}`);
+      this.logger.log(
+        `Starting blockchain process for document ${documentId}`,
+      );
 
-      // Step 1: Generate PDF
-      this.logger.log('📄 Generating PDF certificate...');
-      const pdfBuffer = await this.pdfService.generatePdf({
-        document,
-        documentType: document.documentType,
-        issuerName: issuer_info.first_name + " " + issuer_info.last_name,
-        studentName: student_info_db.last_name + " " + student_info_db.first_name,
-      });
+      this.logger.log('📄 Generating PDF via pdfme...');
+      const pdfBuffer = await this.pdfService.generatePdfBuffer(pdfPayload);
 
-      // Step 2: Upload PDF to IPFS
       this.logger.log('📤 Uploading PDF to IPFS...');
       const pdfFileName = `document-${documentId}.pdf`;
-      const pdfIpfsHash = await this.ipfsService.uploadFile(pdfBuffer, pdfFileName, {
-        documentId: documentId,
-        documentType: document.documentType.document_type_name,
-        studentId: document.user_id,
-      });
+      const pdfIpfsHash = await this.ipfsService.uploadFile(
+        pdfBuffer,
+        pdfFileName,
+        {
+          documentId: documentId,
+          documentType: document.documentType.document_type_name,
+          studentId: document.user_id,
+        },
+      );
       this.logger.log(`✅ PDF uploaded to IPFS: ${pdfIpfsHash}`);
 
-      // Step 3: Prepare metadata for IPFS (include PDF link)
-      const metadata = {
-        studentId: studentBlockchainId,
-        documentType: document.documentType.document_type_name,
-        documentTypeId: document.document_type_id,
-        studentUserId: document.user_id,
-        issuerUserId: issuerId,
-        ...document.metadata,
-        issuedDate: new Date().toISOString(),
-        issuer: issuerId,
-        version: '1.0',
-        // Add PDF IPFS link
-        pdfFile: `ipfs://${pdfIpfsHash}`,
-        pdfGateway: `https://gateway.pinata.cloud/ipfs/${pdfIpfsHash}`,
+      const certificateMetadata = {
+        name: `${document.documentType.document_type_name} - ${student_info_db.last_name} ${student_info_db.first_name}`,
+        description:
+          document.documentType.description ||
+          'Educational credential issued via Document Service',
+        image: `https://gateway.pinata.cloud/ipfs/${pdfIpfsHash}`,
+        attributes: [
+          { trait_type: 'Loại văn bằng', value: document.documentType.document_type_name },
+          { trait_type: 'Mã sinh viên', value: student_info_db.student_code || 'N/A' },
+          { trait_type: 'Ngành học', value: document.metadata?.major || 'N/A' },
+          { trait_type: 'Ngày cấp', value: new Date().toISOString().split('T')[0] },
+          { trait_type: 'Trạng thái', value: 'Còn hiệu lực' },
+        ],
       };
 
       this.logger.log('Metadata prepared, uploading to IPFS...');
-
-      // Step 4: Upload metadata to IPFS
-      const ipfsHash = await this.ipfsService.uploadMetadata(metadata);
+      const ipfsHash = await this.ipfsService.uploadMetadata(certificateMetadata);
       const tokenURI = `ipfs://${ipfsHash}`;
 
       this.logger.log(`IPFS upload successful: ${ipfsHash}`);
 
-      // Step 5: Create document hash (for blockchain integrity)
       const documentHash = ethers.keccak256(
-        ethers.toUtf8Bytes(JSON.stringify(metadata)),
+        ethers.toUtf8Bytes(JSON.stringify(certificateMetadata)),
       );
-
       this.logger.log(`Document hash generated: ${documentHash}`);
 
-      // Step 6: Sign document on blockchain and mint NFT
       this.logger.log('Signing document on blockchain...');
-      
       const { txHash, blockchainDocId, tokenId } =
         await this.blockchainService.signDocument(
           studentBlockchainId,
@@ -302,7 +521,6 @@ export class DocumentsService {
       this.logger.log(`- Blockchain Doc ID: ${blockchainDocId}`);
       this.logger.log(`- NFT Token ID: ${tokenId}`);
 
-      // Step 7: Update document with blockchain data
       document.tx_hash = txHash;
       document.blockchain_doc_id = blockchainDocId;
       document.token_id = tokenId;
@@ -316,17 +534,17 @@ export class DocumentsService {
 
       const savedDocument = await this.documentRepository.save(document);
 
-      this.logger.log(`✅ Document ${documentId} successfully minted as NFT!`);
+      this.logger.log(
+        `✅ Document ${documentId} successfully minted as NFT!`,
+      );
 
       return savedDocument;
     } catch (error) {
       this.logger.error('❌ Failed to sign document on blockchain', error);
 
-      // Mark as failed
       document.status = DocumentStatus.FAILED;
       await this.documentRepository.save(document);
 
-      // Re-throw with more context
       throw new BadRequestException(
         `Failed to mint document on blockchain: ${error.message}`,
       );
@@ -471,6 +689,46 @@ export class DocumentsService {
     document.is_valid = false;
     document.tx_hash = txHash;
     document.verified_at = new Date();
+
+    return await this.documentRepository.save(document);
+  }
+
+  async rejectDocument(
+    documentId: string,
+    issuerId: string,
+    dto: RejectDocumentDto,
+  ): Promise<Document> {
+    this.logger.log(`Manager ${issuerId} rejecting document ${documentId}`);
+
+    const document = await this.documentRepository.findOne({
+      where: { document_id: documentId },
+      relations: ['documentType'],
+    });
+
+    if (!document) {
+      throw new NotFoundException('Document not found');
+    }
+
+    const rejectableStatuses = [
+      DocumentStatus.DRAFT,
+      DocumentStatus.PENDING_APPROVAL,
+    ];
+
+    if (!rejectableStatuses.includes(document.status)) {
+      throw new BadRequestException(
+        `Cannot reject document with status: ${document.status}. Only DRAFT or PENDING_APPROVAL documents can be rejected.`,
+      );
+    }
+
+    document.status = DocumentStatus.REJECTED;
+    document.issuer_id = issuerId;
+    document.is_valid = false;
+        const rejectionMetadata = {
+          ...(document.metadata || {}),
+          rejection_reason: dto.reason,
+          rejection_at: new Date().toISOString(),
+        };
+        document.metadata = rejectionMetadata;
 
     return await this.documentRepository.save(document);
   }

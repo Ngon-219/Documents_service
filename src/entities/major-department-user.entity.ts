@@ -42,3 +42,4 @@ export class MajorDepartmentUser {
   user: User;
 }
 
+

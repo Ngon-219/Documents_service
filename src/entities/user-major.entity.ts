@@ -34,3 +34,4 @@ export class UserMajor {
   major: Major;
 }
 
+

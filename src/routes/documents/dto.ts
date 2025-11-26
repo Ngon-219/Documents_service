@@ -31,6 +31,14 @@ export class RequestDocumentDto {
   @IsObject()
   @IsOptional()
   metadata?: Record<string, any>; // Grades, GPA, etc.
+
+  @ApiPropertyOptional({
+    description: 'Document type UUID',
+    example: '660e8400-e29b-41d4-a716-446655440001',
+  })
+  @IsUUID()
+  @IsOptional()
+  certificate_id: string;
 }
 
 /**
@@ -46,6 +54,24 @@ export class ApproveDocumentDto {
   @IsString()
   @IsNotEmpty()
   authenticator_code: string;
+
+  @ApiPropertyOptional({
+    description: 'Pdf json schema template (can be large JSON string)',
+    example: '{"basePdf": "...", "schemas": [...]}'
+  })
+  @IsOptional()
+  @IsString()
+  json_template?: string;
+}
+
+export class RejectDocumentDto {
+  @ApiProperty({
+    description: 'Reason for rejecting the document',
+    example: 'Missing prerequisite documents',
+  })
+  @IsString()
+  @IsNotEmpty()
+  reason: string;
 }
 
 /**

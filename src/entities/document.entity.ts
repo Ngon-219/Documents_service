@@ -15,6 +15,7 @@ export enum DocumentStatus {
   APPROVED = 'approved',
   PENDING_BLOCKCHAIN = 'pending_blockchain',
   MINTED = 'minted',
+  REJECTED = 'rejected',
   REVOKED = 'revoked',
   FAILED = 'failed',
 }
@@ -60,6 +61,9 @@ export class Document {
   // Metadata (flexible JSON)
   @Column({ type: 'jsonb', nullable: true })
   metadata: Record<string, any>;
+
+  @Column({ type: 'jsonb', nullable: true })
+  pdf_schema: Record<string, any>;
 
   // Status
   @Column({

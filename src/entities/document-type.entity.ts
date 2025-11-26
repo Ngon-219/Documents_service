@@ -23,7 +23,7 @@ export class DocumentType {
   @Column({ type: 'text', nullable: true })
   description: string | null;
 
-  @Column({ type: 'varchar', nullable: true })
+  @Column({ type: 'text', nullable: true })
   template_pdf: string | null;
 
   @CreateDateColumn()
