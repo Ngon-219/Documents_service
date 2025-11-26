@@ -23,7 +23,7 @@ import {
 } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { DocumentsService } from './documents.service';
-import { RequestDocumentDto, ApproveDocumentDto, RejectDocumentDto, DocumentResponse, VerifyDocumentResponse, GetAllDocumentsQueryDto, PaginatedDocumentsResponse } from './dto';
+import { RequestDocumentDto, ApproveDocumentDto, RejectDocumentDto, DocumentResponse, VerifyDocumentResponse, GetAllDocumentsQueryDto, PaginatedDocumentsResponse, CertificateResponse, PublicDocumentInfoResponse } from './dto';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
 import { Roles, UserRole } from '../../auth/decorators/roles.decorator';
@@ -174,6 +174,32 @@ export class DocumentsController {
   }
 
   /**
+   * Get my documents with pagination and filtering (current user from JWT)
+   * GET /documents/my?page=1&limit=10&status=draft&sort=created_at&order=DESC
+   * Auth: Any authenticated user (typically Student)
+   */
+  @Get('my')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ 
+    summary: 'Get my documents with pagination', 
+    description: 'Retrieve paginated documents for the current authenticated user with filtering options. User ID is automatically extracted from JWT token.' 
+  })
+  @ApiResponse({ 
+    status: 200, 
+    description: 'Paginated list of current user documents',
+    type: PaginatedDocumentsResponse,
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async getMyDocumentsPaginated(
+    @Req() request: RequestWithUser,
+    @Query() query: GetAllDocumentsQueryDto
+  ): Promise<PaginatedDocumentsResponse> {
+    const user_id = request.user.userId;
+    return await this.documentsService.getMyDocuments(user_id, query);
+  }
+
+  /**
    * Get student's documents by userId (Manager/Admin/Teacher only)
    * GET /documents/student/:userId
    * Auth: Manager/Admin/Teacher only
@@ -198,6 +224,54 @@ export class DocumentsController {
   async getStudentDocuments(@Param('userId') userId: string) {
     // Manager/Admin/Teacher can view any student's documents
     return await this.documentsService.getStudentDocuments(userId);
+  }
+
+  /**
+   * Get certificates for current user
+   * GET /documents/certificates?document_type_id=xxx
+   * Auth: Authenticated users
+   * NOTE: Must be defined BEFORE @Get(':id') to avoid route conflict
+   */
+  @Get('certificates')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ 
+    summary: 'Get certificates', 
+    description: 'Retrieve certificates for the current authenticated user. Optionally filter by document_type_id. User ID is automatically extracted from JWT token.' 
+  })
+  @ApiResponse({ 
+    status: 200, 
+    description: 'List of certificates',
+    type: [CertificateResponse],
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async getCertificates(
+    @Query('document_type_id') documentTypeId: string | undefined,
+    @Req() request: RequestWithUser,
+  ): Promise<CertificateResponse[]> {
+    const user_id = request.user.userId;
+    return await this.documentsService.getCertificates(user_id, documentTypeId);
+  }
+
+  /**
+   * Get public document information by document_id (PUBLIC - no auth required)
+   * GET /documents/public/:documentId
+   * Used for QR code verification
+   */
+  @Get('public/:documentId')
+  @ApiOperation({ 
+    summary: 'Get public document information (Public)', 
+    description: 'Get full document information including student, issuer, and blockchain verification by document_id. No authentication required. Used for QR code verification.' 
+  })
+  @ApiParam({ name: 'documentId', description: 'Document UUID (from QR code)' })
+  @ApiResponse({ 
+    status: 200, 
+    description: 'Public document information',
+    type: PublicDocumentInfoResponse,
+  })
+  @ApiResponse({ status: 404, description: 'Document not found' })
+  async getPublicDocumentInfo(@Param('documentId') documentId: string) {
+    return await this.documentsService.getPublicDocumentInfo(documentId);
   }
 
   /**

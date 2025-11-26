@@ -151,6 +151,58 @@ export class VerifyDocumentResponse {
   };
 }
 
+export class PublicDocumentInfoResponse {
+  @ApiProperty({ description: 'Document information' })
+  document: {
+    document_id: string;
+    document_type_id: string;
+    document_type_name: string | null;
+    status: string;
+    is_valid: boolean;
+    created_at: Date;
+    updated_at: Date;
+    issued_at: Date | null;
+    verified_at: Date | null;
+    blockchain_doc_id: string | null;
+    token_id: string | null;
+    tx_hash: string | null;
+    contract_address: string;
+    ipfs_hash: string | null;
+    pdf_ipfs_hash: string | null;
+    document_hash: string | null;
+    metadata: any;
+  };
+
+  @ApiProperty({ description: 'Student information' })
+  student: {
+    user_id: string;
+    first_name: string;
+    last_name: string;
+    email: string;
+    student_code: string | null;
+    phone_number: string;
+    address: string;
+    cccd: string;
+    wallet_address: string | null;
+  } | null;
+
+  @ApiProperty({ description: 'Issuer information' })
+  issuer: {
+    user_id: string;
+    first_name: string;
+    last_name: string;
+    email: string;
+    role: string;
+  } | null;
+
+  @ApiProperty({ description: 'Blockchain verification information' })
+  blockchain: {
+    owner: string;
+    isValid: boolean;
+    metadata: any;
+  } | null;
+}
+
 /**
  * Query DTO for listing all documents with pagination and status filter
  */
@@ -235,5 +287,31 @@ export class PaginatedDocumentsResponse {
 
   @ApiProperty({ description: 'Whether there is a previous page' })
   hasPrev: boolean;
+}
+
+/**
+ * Certificate Response DTO
+ */
+export class CertificateResponse {
+  @ApiProperty({ description: 'Certificate UUID' })
+  certificate_id: string;
+
+  @ApiProperty({ description: 'Document type UUID' })
+  document_type_id: string;
+
+  @ApiProperty({ description: 'Document type name' })
+  document_type_name: string;
+
+  @ApiProperty({ description: 'Issued date' })
+  issued_date: string;
+
+  @ApiPropertyOptional({ description: 'Expiry date' })
+  expiry_date?: string;
+
+  @ApiPropertyOptional({ description: 'Description' })
+  description?: string;
+
+  @ApiPropertyOptional({ description: 'Additional metadata' })
+  metadata?: Record<string, any>;
 }
 

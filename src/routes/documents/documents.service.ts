@@ -9,7 +9,7 @@ import { IPFSService } from '../../blockchain/ipfs.service';
 import { DocumentData, PdfServiceService, PdfTemplatePayload } from '../../pdf_service/pdf_service.service';
 import { ConfigService } from '@nestjs/config';
 import { ethers } from 'ethers';
-import { RequestDocumentDto, ApproveDocumentDto, RejectDocumentDto, GetAllDocumentsQueryDto, PaginatedDocumentsResponse } from './dto';
+import { RequestDocumentDto, ApproveDocumentDto, RejectDocumentDto, GetAllDocumentsQueryDto, PaginatedDocumentsResponse, CertificateResponse } from './dto';
 import { MfaService } from '../../grpc/mfa.service';
 import { User } from 'src/entities/user.entity';
 import { Certificate } from 'src/entities/certificate.entity';
@@ -605,6 +605,49 @@ export class DocumentsService {
   }
 
   /**
+   * Get current user's documents with pagination and filtering
+   * Similar to getAllDocuments but filtered by user_id from JWT
+   */
+  async getMyDocuments(userId: string, query: GetAllDocumentsQueryDto): Promise<PaginatedDocumentsResponse> {
+    const { page = 1, limit = 10, status, sort = 'created_at', order = 'DESC' } = query;
+
+    const queryBuilder = this.documentRepository
+      .createQueryBuilder('document')
+      .leftJoinAndSelect('document.documentType', 'documentType')
+      .where('document.user_id = :userId', { userId });
+
+    // Filter by status if provided
+    if (status) {
+      queryBuilder.andWhere('document.status = :status', { status });
+    }
+
+    // Validate sort field and apply sorting
+    const validSortFields = ['created_at', 'updated_at', 'issued_at'];
+    const sortField = validSortFields.includes(sort) ? sort : 'created_at';
+    const sortOrder = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+    queryBuilder.orderBy(`document.${sortField}`, sortOrder);
+
+    // Pagination
+    const skip = (page - 1) * limit;
+    queryBuilder.skip(skip).take(limit);
+
+    // Execute query
+    const [documents, total] = await queryBuilder.getManyAndCount();
+
+    const totalPages = Math.ceil(total / limit);
+
+    return {
+      data: documents,
+      total,
+      page,
+      limit,
+      totalPages,
+      hasNext: page < totalPages,
+      hasPrev: page > 1,
+    };
+  }
+
+  /**
    * Get document by ID
    */
   async getDocumentById(documentId: string): Promise<Document> {
@@ -618,6 +661,94 @@ export class DocumentsService {
     }
 
     return document;
+  }
+
+  /**
+   * Get public document information by document_id (for QR code verification)
+   * Returns full information including student, issuer, and document type
+   */
+  async getPublicDocumentInfo(documentId: string): Promise<any> {
+    this.logger.log(`Getting public document info for document_id: ${documentId}`);
+
+    const document = await this.documentRepository
+      .createQueryBuilder('document')
+      .leftJoinAndSelect('document.documentType', 'documentType')
+      .where('document.document_id = :documentId', { documentId })
+      .getOne();
+
+    if (!document) {
+      throw new NotFoundException('Document not found');
+    }
+
+    // Get student information
+    const student = await this.userRepository.findOne({
+      where: { user_id: document.user_id },
+      relations: ['wallet'],
+    });
+
+    // Get issuer information
+    const issuer = await this.userRepository.findOne({
+      where: { user_id: document.issuer_id },
+    });
+
+    // Get blockchain verification if token_id exists
+    let blockchainVerification: {
+      owner: string;
+      isValid: boolean;
+      metadata: any;
+    } | null = null;
+    if (document.token_id) {
+      try {
+        blockchainVerification = await this.blockchainService.verifyNFT(document.token_id);
+      } catch (error) {
+        this.logger.warn(`Failed to verify on blockchain for token_id ${document.token_id}:`, error);
+      }
+    }
+
+    return {
+      document: {
+        document_id: document.document_id,
+        document_type_id: document.document_type_id,
+        document_type_name: document.documentType?.document_type_name || null,
+        status: document.status,
+        is_valid: document.is_valid,
+        created_at: document.created_at,
+        updated_at: document.updated_at,
+        issued_at: document.issued_at,
+        verified_at: document.verified_at,
+        blockchain_doc_id: document.blockchain_doc_id,
+        token_id: document.token_id,
+        tx_hash: document.tx_hash,
+        contract_address: document.contract_address,
+        ipfs_hash: document.ipfs_hash,
+        pdf_ipfs_hash: document.pdf_ipfs_hash,
+        document_hash: document.document_hash,
+        metadata: document.metadata,
+      },
+      student: student ? {
+        user_id: student.user_id,
+        first_name: student.first_name,
+        last_name: student.last_name,
+        email: student.email,
+        student_code: student.student_code,
+        phone_number: student.phone_number,
+        address: student.address,
+        cccd: student.cccd,
+        wallet_address: student.wallet?.address || null,
+      } : null,
+      issuer: issuer ? {
+        user_id: issuer.user_id,
+        first_name: issuer.first_name,
+        last_name: issuer.last_name,
+        email: issuer.email,
+        role: issuer.role,
+      } : null,
+      blockchain: blockchainVerification ? {
+        owner: blockchainVerification.owner,
+        isValid: blockchainVerification.isValid,
+        metadata: blockchainVerification.metadata,
+      } : null,
+    };
   }
 
   /**
@@ -838,5 +969,48 @@ export class DocumentsService {
   //     throw new BadRequestException(`Failed to download PDF: ${error.message}`);
   //   }
   // }
+
+  /**
+   * Get certificates for current user, optionally filtered by document_type_id
+   */
+  async getCertificates(userId: string, documentTypeId?: string): Promise<CertificateResponse[]> {
+    this.logger.log(`Getting certificates for user ${userId}${documentTypeId ? ` with document_type_id ${documentTypeId}` : ''}`);
+
+    const whereCondition: any = { user_id: userId };
+    if (documentTypeId) {
+      whereCondition.document_type_id = documentTypeId;
+    }
+
+    const certificates = await this.certificateReposioty.find({
+      where: whereCondition,
+      relations: ['documentType'],
+      order: { issued_date: 'DESC' },
+    });
+
+    return certificates.map((cert) => {
+      // Handle date conversion - TypeORM 'date' type may return string or Date
+      const formatDate = (date: Date | string | null | undefined): string | undefined => {
+        if (!date) return undefined;
+        if (typeof date === 'string') {
+          // If it's already a string, return as is (assuming YYYY-MM-DD format)
+          return date.split('T')[0];
+        }
+        if (date instanceof Date) {
+          return date.toISOString().split('T')[0];
+        }
+        return undefined;
+      };
+
+      return {
+        certificate_id: cert.certificate_id,
+        document_type_id: cert.document_type_id,
+        document_type_name: cert.documentType?.document_type_name || 'Unknown',
+        issued_date: formatDate(cert.issued_date) || '',
+        expiry_date: formatDate(cert.expiry_date),
+        description: cert.description || undefined,
+        metadata: cert.metadata || undefined,
+      };
+    });
+  }
 }
 
