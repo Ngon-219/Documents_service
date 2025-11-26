@@ -10,6 +10,7 @@ import { BlockchainService } from '../../blockchain/blockchain.service';
 import { IPFSService } from '../../blockchain/ipfs.service';
 import { PdfServiceService } from '../../pdf_service/pdf_service.service';
 import { GrpcModule } from '../../grpc/grpc.module';
+import { RabbitMQModule } from '../../rabbitmq/rabbitmq.module';
 import { Certificate } from 'src/entities/certificate.entity';
 import { ScoreBoard } from 'src/entities/score-board.entity';
 
@@ -17,6 +18,7 @@ import { ScoreBoard } from 'src/entities/score-board.entity';
   imports: [
     TypeOrmModule.forFeature([Document, DocumentType, Wallet, User, Certificate, ScoreBoard]),
     GrpcModule,
+    RabbitMQModule,
   ],
   controllers: [DocumentsController],
   providers: [DocumentsService, BlockchainService, IPFSService, PdfServiceService],

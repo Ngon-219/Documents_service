@@ -14,6 +14,7 @@ import { MfaService } from '../../grpc/mfa.service';
 import { User } from 'src/entities/user.entity';
 import { Certificate } from 'src/entities/certificate.entity';
 import { ScoreBoard } from '../../entities/score-board.entity';
+import { RabbitMQService } from '../../rabbitmq/rabbitmq.service';
 
 @Injectable()
 export class DocumentsService {
@@ -37,6 +38,7 @@ export class DocumentsService {
     private pdfService: PdfServiceService,
     private configService: ConfigService,
     private mfaService: MfaService,
+    private rabbitMQService: RabbitMQService,
   ) {}
 
   async requestDocument(userId: string, dto: RequestDocumentDto): Promise<Document> {
@@ -538,6 +540,46 @@ export class DocumentsService {
         `✅ Document ${documentId} successfully minted as NFT!`,
       );
 
+      // Send email notification with token URI and PDF link
+      try {
+        const tokenUri = `ipfs://${ipfsHash}`;
+        const gateway = this.configService.get<string>('PINATA_GATEWAY') || 'gateway.pinata.cloud';
+        const pdfLink = `https://${gateway}/ipfs/${pdfIpfsHash}`;
+        const emailSubject = `Tài liệu đã được phát hành thành công - ${document.documentType.document_type_name}`;
+        const emailBody = `
+Xin chào ${student_info_db.last_name} ${student_info_db.first_name},
+
+Tài liệu của bạn đã được phát hành thành công trên blockchain!
+
+Thông tin tài liệu:
+- Loại tài liệu: ${document.documentType.document_type_name}
+- Document ID: ${documentId}
+- Token ID: ${tokenId}
+- Token URI: ${tokenUri}
+- Transaction Hash: ${txHash}
+- Ngày phát hành: ${new Date().toLocaleString('vi-VN')}
+
+📄 Link PDF tài liệu: ${pdfLink}
+
+Bạn có thể:
+- Tải xuống PDF tài liệu từ link trên
+- Sử dụng Token URI để xem và xác thực tài liệu trên blockchain
+
+Trân trọng,
+Hệ thống quản lý tài liệu
+        `.trim();
+
+        await this.rabbitMQService.publishToMailQueue(
+          student_info_db.email,
+          emailSubject,
+          emailBody,
+        );
+        this.logger.log(`✅ Email notification sent to ${student_info_db.email}`);
+      } catch (emailError) {
+        this.logger.error('Failed to send approval email:', emailError);
+        // Don't throw error, document is already approved
+      }
+
       return savedDocument;
     } catch (error) {
       this.logger.error('❌ Failed to sign document on blockchain', error);
@@ -969,6 +1011,127 @@ export class DocumentsService {
   //     throw new BadRequestException(`Failed to download PDF: ${error.message}`);
   //   }
   // }
+
+  /**
+   * Export private key for current user
+   * Requires MFA verification, then sends private key and wallet address via email
+   */
+  async exportPrivateKey(userId: string, dto: { authenticator_code: string }): Promise<{ message: string }> {
+    this.logger.log(`User ${userId} requesting to export private key`);
+
+    // Verify MFA code
+    try {
+      const mfaResult = await this.mfaService.verifyMfaCode(
+        userId,
+        dto.authenticator_code,
+      );
+
+      if (!mfaResult.is_valid) {
+        this.logger.warn(`MFA verification failed for user ${userId}: ${mfaResult.reason}`);
+        
+        if (mfaResult.locked_until) {
+          const lockedUntil = new Date(mfaResult.locked_until * 1000);
+          throw new ForbiddenException(
+            `MFA verification failed. Account locked until ${lockedUntil.toISOString()}. Reason: ${mfaResult.reason}`,
+          );
+        }
+
+        throw new ForbiddenException(
+          `MFA verification failed: ${mfaResult.reason || mfaResult.message}`,
+        );
+      }
+
+      this.logger.log(`✅ MFA verification successful for user ${userId}`);
+    } catch (error) {
+      if (error instanceof ForbiddenException) {
+        throw error;
+      }
+      this.logger.error(`Failed to verify MFA code for user ${userId}`, error);
+      throw new BadRequestException(
+        `MFA verification failed: ${error.message}`,
+      );
+    }
+
+    // Get user info
+    const user = await this.userRepository.findOne({
+      where: { user_id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    // Get wallet
+    const wallet = await this.walletRepository.findOne({
+      where: { user_id: userId },
+    });
+
+    if (!wallet) {
+      throw new NotFoundException('Wallet not found for user');
+    }
+
+    if (!wallet.private_key) {
+      throw new NotFoundException('Private key not found in wallet');
+    }
+
+    // Get all NFT tokens owned by user
+    let nftTokens: string[] = [];
+    try {
+      if (wallet.address) {
+        const studentBlockchainId = await this.blockchainService.getStudentIdByAddress(
+          wallet.address,
+        );
+        nftTokens = await this.blockchainService.getStudentNFTs(studentBlockchainId);
+      }
+    } catch (error) {
+      this.logger.warn(`Failed to get NFT tokens for user ${userId}:`, error);
+      // Continue without NFT tokens
+    }
+
+    // Send email with private key and wallet address
+    const emailSubject = 'Xuất khóa riêng tư ví blockchain';
+    const emailBody = `
+Xin chào ${user.last_name} ${user.first_name},
+
+Bạn đã yêu cầu xuất khóa riêng tư của ví blockchain.
+
+⚠️ CẢNH BÁO BẢO MẬT:
+- Khóa riêng tư này cho phép truy cập hoàn toàn vào ví của bạn
+- KHÔNG BAO GIỜ chia sẻ khóa riêng tư với bất kỳ ai
+- Lưu trữ khóa riêng tư ở nơi an toàn
+- Nếu khóa riêng tư bị lộ, hãy chuyển tất cả tài sản sang ví mới ngay lập tức
+
+Thông tin ví:
+- Địa chỉ ví: ${wallet.address}
+- Khóa riêng tư: ${wallet.private_key}
+- Loại chuỗi: ${wallet.chain_type}
+- Network ID: ${wallet.network_id}
+${nftTokens.length > 0 ? `- Số lượng NFT: ${nftTokens.length}\n- Token IDs: ${nftTokens.join(', ')}` : ''}
+
+Vui lòng lưu thông tin này ở nơi an toàn và không chia sẻ với bất kỳ ai.
+
+Trân trọng,
+Hệ thống quản lý tài liệu
+    `.trim();
+
+    try {
+      const emailSent = await this.rabbitMQService.publishToMailQueue(
+        user.email,
+        emailSubject,
+        emailBody,
+      );
+
+      if (emailSent) {
+        this.logger.log(`✅ Private key export email sent to ${user.email}`);
+        return { message: 'Private key has been sent to your email address' };
+      } else {
+        throw new BadRequestException('Failed to send email');
+      }
+    } catch (error) {
+      this.logger.error(`Failed to send private key export email:`, error);
+      throw new BadRequestException(`Failed to send email: ${error.message}`);
+    }
+  }
 
   /**
    * Get certificates for current user, optionally filtered by document_type_id

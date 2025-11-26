@@ -75,6 +75,19 @@ export class RejectDocumentDto {
 }
 
 /**
+ * DTO for exporting private key
+ */
+export class ExportPrivateKeyDto {
+  @ApiProperty({
+    description: 'MFA authenticator code (6-digit code from authenticator app)',
+    example: '123456',
+  })
+  @IsString()
+  @IsNotEmpty()
+  authenticator_code: string;
+}
+
+/**
  * Response DTOs
  */
 export class DocumentResponse {

@@ -23,7 +23,7 @@ import {
 } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { DocumentsService } from './documents.service';
-import { RequestDocumentDto, ApproveDocumentDto, RejectDocumentDto, DocumentResponse, VerifyDocumentResponse, GetAllDocumentsQueryDto, PaginatedDocumentsResponse, CertificateResponse, PublicDocumentInfoResponse } from './dto';
+import { RequestDocumentDto, ApproveDocumentDto, RejectDocumentDto, DocumentResponse, VerifyDocumentResponse, GetAllDocumentsQueryDto, PaginatedDocumentsResponse, CertificateResponse, PublicDocumentInfoResponse, ExportPrivateKeyDto } from './dto';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
 import { Roles, UserRole } from '../../auth/decorators/roles.decorator';
@@ -224,6 +224,33 @@ export class DocumentsController {
   async getStudentDocuments(@Param('userId') userId: string) {
     // Manager/Admin/Teacher can view any student's documents
     return await this.documentsService.getStudentDocuments(userId);
+  }
+
+  /**
+   * Export private key
+   * POST /documents/export-private-key
+   * Auth: Authenticated users
+   */
+  @Post('export-private-key')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ 
+    summary: 'Export private key', 
+    description: 'Export wallet private key and NFT token addresses. Requires MFA verification. Private key will be sent via email.' 
+  })
+  @ApiResponse({ 
+    status: 200, 
+    description: 'Private key export initiated, email will be sent',
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'MFA verification failed' })
+  @ApiResponse({ status: 404, description: 'User or wallet not found' })
+  async exportPrivateKey(
+    @Req() request: RequestWithUser,
+    @Body() dto: ExportPrivateKeyDto,
+  ) {
+    const user_id = request.user.userId;
+    return await this.documentsService.exportPrivateKey(user_id, dto);
   }
 
   /**

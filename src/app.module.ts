@@ -5,6 +5,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { DocumentsModule } from './routes/documents';
 import { AuthModule } from './auth/auth.module';
+import { RabbitMQModule } from './rabbitmq/rabbitmq.module';
 import { getDatabaseConfig } from './config/database.config';
 
 @Module({
@@ -24,6 +25,9 @@ import { getDatabaseConfig } from './config/database.config';
 
     // Auth module (JWT authentication & authorization)
     AuthModule,
+
+    // RabbitMQ module
+    RabbitMQModule,
 
     // Feature modules
     DocumentsModule,
