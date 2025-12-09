@@ -312,6 +312,9 @@ export class CertificateResponse {
   @ApiProperty({ description: 'Document type UUID' })
   document_type_id: string;
 
+  @ApiProperty({ description: 'Certificate name' })
+  certificate_name: string;
+
   @ApiProperty({ description: 'Document type name' })
   document_type_name: string;
 

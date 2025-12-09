@@ -103,6 +103,7 @@ export class DocumentsService {
         let my_cerfificate = await this.certificateReposioty.findOne({
           where: { certificate_id: dto.certificate_id },
         });
+        console.log("certificate: ", my_cerfificate);
 
         if (!my_cerfificate) {
           throw new NotFoundException('certificate type not found');
@@ -126,6 +127,7 @@ export class DocumentsService {
           metadata: my_cerfificate?.metadata || {},
           documentType: documentType,
           qr_code: '',
+          certificateName: my_cerfificate.certificate_name
         };
 
         pdfTemplate = await this.pdfService.generateCertificate(data);
@@ -1167,6 +1169,7 @@ Hệ thống quản lý tài liệu
       return {
         certificate_id: cert.certificate_id,
         document_type_id: cert.document_type_id,
+        certificate_name: cert.certificate_name || cert.documentType?.document_type_name || 'Unknown',
         document_type_name: cert.documentType?.document_type_name || 'Unknown',
         issued_date: formatDate(cert.issued_date) || '',
         expiry_date: formatDate(cert.expiry_date),

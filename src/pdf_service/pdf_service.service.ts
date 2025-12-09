@@ -19,6 +19,7 @@ export interface DocumentData {
   metadata: Record<string, any> | string;
   documentType: DocumentType;
   qr_code?: string;
+  certificateName?: string;
 }
 
 export interface PdfTemplatePayload {
@@ -131,14 +132,14 @@ export class PdfServiceService {
     pdf_template.basePdf = pdf_template.basePdf || BLANK_PDF;
     this.applyFont(pdf_template);
 
+    const certificateNameValue = data.certificateName || data.documentTypeName || "";
+    
     const inputs: Array<Record<string, any>> = [
       {
-        subtitile: data.documentType.document_type_name || "",
+        subtitile: certificateNameValue,
+        subtitle: certificateNameValue,
         signature: data.studentName || "",
-        details:
-          typeof data.metadata === 'object'
-            ? JSON.stringify(data.metadata ?? {})
-            : data.metadata || "",
+        details: data.description,
         "from1-1": "Người xác nhận",
         "from1-2": data.issuerName || "",
         "from2-1": "Cơ quan cấp phát",

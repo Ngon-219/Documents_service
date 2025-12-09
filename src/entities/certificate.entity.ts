@@ -21,6 +21,9 @@ export class Certificate {
   @Column({ type: 'uuid' })
   document_type_id: string;
 
+  @Column({ type: 'varchar' })
+  certificate_name: string;
+
   @Column({ type: 'date' })
   issued_date: Date;
 
